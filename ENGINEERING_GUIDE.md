@@ -152,6 +152,38 @@ precondition most downstream Datadog SQL Server integration testing will need.
 
 ---
 
+## `register-vm.sh` internals worth knowing
+
+Packer's QEMU builder runs `qemu-system-x86_64` directly, entirely bypassing libvirt — no domain
+is ever registered as a side effect of `build.sh`, which is why a finished build doesn't show up
+in virt-manager. `register-vm.sh` closes that gap after the fact, as a deliberately separate
+script (build.sh's job stays "produce a disposable disk artifact"; libvirt lifecycle is its own
+concern, per `CLAUDE.md`'s tool-responsibility split).
+
+- **Hand-rolled domain XML, not `virt-install`.** `virt-install`'s CLI flag syntax for pinning an
+  exact `loader`/`nvram` pair (rather than letting it auto-select/copy a template) has shifted
+  across versions; a small heredoc template mirroring exactly what Packer's qemu builder used
+  (`q35`, OVMF code + this build's own `efivars.fd`, `virtio-scsi`, `virtio-net`) is simpler and
+  more predictable than chasing that flag surface. Same instinct as `autounattend.xml.pkrtpl`
+  elsewhere in this repo.
+- **`virsh undefine` needs an explicit nvram choice once a domain has one.** Plain `virsh undefine`
+  refuses outright on a domain with an `<nvram>` element — it forces a choice between `--nvram`
+  (delete the file) and `--keep-nvram` (leave it). This script always uses `--keep-nvram`: on a
+  re-register, the domain's nvram path is `OUTPUT_DIR/efivars.fd`, which the *new* Packer build has
+  already overwritten with fresh UEFI vars by the time re-registration runs — `--nvram` would
+  delete the file the new build just wrote, not some stale leftover. Confirmed directly: an
+  `--nvram` attempt during development did exactly that.
+- **Refuses to touch a running domain.** Re-registering after a rebuild is the expected common
+  case (same `vm_name` every time), but only auto-replaces a domain that's `shut off` — a
+  `running`/`paused` domain fails loudly instead of being silently destroyed.
+- **Network is libvirt's `default` NAT network, not Packer's build-time networking.** Packer's own
+  build used QEMU's isolated usermode networking (with WinRM port-forwarded in) to provision the
+  VM — that's gone once it's a normal libvirt domain. The guest gets a fresh DHCP lease on
+  `default` and a different IP; there's no way to predict it in advance, only to check
+  `virsh domifaddr <name>` after boot.
+
+---
+
 ## Troubleshooting index
 
 If a build fails, check whether it's a known, already-root-caused issue before re-investigating

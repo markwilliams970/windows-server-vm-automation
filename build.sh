@@ -293,10 +293,25 @@ packer validate \
   -var "virtio_drivers_dir=${VIRTIO_DRIVERS_DIR}" \
   "${PACKER_DIR}"
 
+VM_NAME="${PKR_VAR_vm_name:-win${WINDOWS_VERSION}-dc}"
+OUTPUT_DIR="${PACKER_DIR}/output/${VM_NAME}"
+
 echo "==> Building Windows Server ${WINDOWS_VERSION} VM"
 packer build \
   "${PACKER_EXTRA_VARS[@]}" \
   -var "virtio_drivers_dir=${VIRTIO_DRIVERS_DIR}" \
   "${PACKER_DIR}"
 
-echo "==> Build complete. Disk artifact in ${PACKER_DIR}/output/"
+echo "==> Build complete. Disk artifact in ${OUTPUT_DIR}/"
+
+# Off by default: Packer's QEMU builder never touches libvirt, so nothing
+# is registered as a VM anywhere unless asked for explicitly. See
+# register-vm.sh for what this actually does and why it's a separate
+# script rather than folded into the packer build itself.
+if [[ "${REGISTER_VM:-false}" == "true" ]]; then
+  echo "==> Registering VM with libvirt (REGISTER_VM=true)"
+  CPUS="${PKR_VAR_cpus:-4}" MEMORY_MB="${PKR_VAR_memory_size:-16384}" WINDOWS_VERSION="${WINDOWS_VERSION}" \
+    "${REPO_ROOT}/register-vm.sh" "${VM_NAME}" "${OUTPUT_DIR}"
+else
+  echo "==> Not registered with libvirt/virt-manager (set REGISTER_VM=true to do so, or run ./register-vm.sh ${VM_NAME} afterward)"
+fi

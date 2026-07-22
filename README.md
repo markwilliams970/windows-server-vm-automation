@@ -196,6 +196,7 @@ as `PKR_VAR_<name>=...` (picked up automatically by Packer for anything defined 
 | `WIN_ISO_PATH` / `WIN_ISO_CHECKSUM` | unset | Set both to point at a specific local Windows ISO instead of the cache/download flow. |
 | `VIRTIO_ISO_PATH` | unset | Set to point at a specific local `virtio-win.iso` instead of the cache/download flow. |
 | `SERVICES_YAML_PATH` | `services.yaml` at repo root | Use an alternate services file for a given run. |
+| `REGISTER_VM` | `false` | Set `true` to register the finished build as a libvirt domain automatically — see [Registering the VM with virt-manager](#registering-the-vm-with-virt-manager). |
 
 **Packer-level (`PKR_VAR_<name>`, defined in `packer/variables.pkr.hcl`):**
 
@@ -223,13 +224,48 @@ WINDOWS_VERSION=2022 PKR_VAR_domain_name=lab.internal PKR_VAR_cpus=2 ./build.sh
 ## Output and connecting to the VM
 
 The finished disk lands at `packer/output/<vm_name>/<vm_name>.qcow2` (default
-`packer/output/win2022-dc/win2022-dc.qcow2`). This directory is gitignored — treat every build as
-disposable, per this project's core design principle (see `CLAUDE.md`).
+`packer/output/win2022-dc/win2022-dc.qcow2`), alongside a per-build `efivars.fd` (its UEFI NVRAM
+state). This directory is gitignored — treat every build as disposable, per this project's core
+design principle (see `CLAUDE.md`).
 
-To boot it standalone and interact with it (e.g. over RDP), use `virt-manager`/`virt-install` or
-a plain `qemu-system-x86_64` invocation with the same UEFI/virtio device flags Packer used (see
-`packer/windows-server.pkr.hcl`'s `source "qemu" "windows_server"` block for the exact flags).
-Log in as `Administrator` with the password set above (default `ChangeMe-Lab123!`).
+### Registering the VM with virt-manager
+
+Packer's QEMU builder runs `qemu-system-x86_64` directly and never talks to libvirt, so a plain
+`build.sh` run leaves you with that qcow2 file but **nothing registered in libvirt** — it won't
+appear in `virt-manager` or `virsh list --all` on its own.
+
+To fix that, either pass `REGISTER_VM=true` to `build.sh` so it happens automatically once the
+build finishes:
+
+```bash
+REGISTER_VM=true ./build.sh
+```
+
+or run `register-vm.sh` yourself afterward, against any already-built output directory:
+
+```bash
+./register-vm.sh win2022-dc                       # uses packer/output/win2022-dc by default
+```
+
+This defines a libvirt domain (`virsh define`) using the same device model Packer built the disk
+with — `q35` machine type, OVMF UEFI (the real code file plus *this build's own* `efivars.fd`, not
+a shared template), `virtio-scsi` disk, `virtio-net` NIC on libvirt's `default` NAT network — so
+the VirtIO drivers already installed in the guest keep working. The domain is left **shut off**;
+start it yourself once it's showing up in virt-manager, or via:
+
+```bash
+virsh -c qemu:///system start win2022-dc
+```
+
+Because the network is now libvirt's own NAT network (DHCP), not the isolated networking Packer
+used for WinRM during the build, expect the guest to come up with a different IP than it had
+during provisioning — check `virsh -c qemu:///system domifaddr win2022-dc` once it's booted, then
+connect over RDP as `Administrator` with the password set above (default `ChangeMe-Lab123!`).
+
+Re-running `register-vm.sh` (or `REGISTER_VM=true ./build.sh` again) after a rebuild with the same
+`vm_name` automatically replaces the old registration — matching this project's "rebuild the same
+environment repeatedly" principle — but only if that old domain is shut off; it refuses to touch
+one that's currently running.
 
 ---
 

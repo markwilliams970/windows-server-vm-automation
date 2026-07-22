@@ -294,6 +294,7 @@ windows-lab/
 ├── services.yaml                              # which roles this build installs (see Service Selection)
 ├── build.sh                                    # Windows Server 2022/2025 build entrypoint
 ├── build-windows11.sh                          # Windows 11 client build entrypoint — separate from build.sh, see WINDOWS11_UNATTENDED.md for why
+├── register-vm.sh                              # registers an already-built disk as a libvirt domain (virt-manager visibility) — Packer's qemu builder never does this itself; also invoked by build.sh when REGISTER_VM=true
 ├── iso_cache/                                  # all cached binary install media (Windows ISOs, virtio-win ISO)
 │   ├── <name>.iso                              # gitignored (*.iso); build.sh/build-windows11.sh check currency vs. public source first
 │   ├── <name>.iso.sha256                       # sha256sum-format checksum sidecar, tracked in git
