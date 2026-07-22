@@ -1,0 +1,11 @@
+# Build artifacts — disposable per CLAUDE.md's ephemeral-infrastructure principle
+packer/output/
+*.iso
+*.qcow2
+
+# Claude Code local session/tooling state — machine-specific, not project source
+.claude/
+
+# Editor/OS cruft
+.DS_Store
+*.swp
