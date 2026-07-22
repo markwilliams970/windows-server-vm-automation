@@ -1,0 +1,66 @@
+# Windows 11 Unattended Install — Engineering Log
+
+Status as of this writing: **blocked, not working.** The build (`build-windows11.sh` + `packer-windows11/`) reaches Windows 11's UEFI boot screen but never gets into Setup — see [Open Issues](#open-issues). This is the third target OS in this project (alongside Windows Server 2022, which works, and Windows Server 2025, which is similarly blocked — see `WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`'s Finding 15). Real progress was made and one genuine bug was found and fixed along the way (see Finding W2); it just wasn't enough to get a full build through yet.
+
+Read this before touching `packer-windows11/windows11.pkr.hcl`, `packer-windows11/answer_files/autounattend-windows11.xml.pkrtpl`, or `build-windows11.sh` — several non-obvious things here (the fully-manual `qemuargs` approach, why `efi_firmware_vars` couldn't be dropped, the `index=` requirement) are easy to accidentally regress.
+
+---
+
+## Current Architecture
+
+**Why a separate directory/scripts, not an extension of the Server build:** Packer loads every `.pkr.hcl` file in a directory as one combined config. Windows 11 needs different defaults for variables that collide by name with the Server template (`efi_firmware_code`/`efi_firmware_vars` in particular — Windows 11 needs the Secure-Boot-enrolled `.ms.fd` OVMF variant, Server doesn't need Secure Boot at all). Rather than thread OS-family conditionals through the existing Server files, Windows 11 gets its own: `packer-windows11/` (template + variables + its own `answer_files/`) and `build-windows11.sh` (mirrors `build.sh`'s structure — prereqs, ISO cache/currency check, invoke Packer — plus one thing Server builds don't need: starting `swtpm` before Packer runs).
+
+**TPM 2.0 + Secure Boot — real, not bypassed.** A design decision made before implementation started: rather than the well-known `HKLM\SYSTEM\Setup\LabConfig` registry bypass (`BypassTPMCheck`, etc.), this build gives the VM a genuine emulated TPM 2.0 device (`swtpm`) and Microsoft-signed Secure Boot firmware (`/usr/share/OVMF/OVMF_CODE_4M.ms.fd` + `OVMF_VARS_4M.ms.fd`, Ubuntu's `ovmf` package — Microsoft's keys pre-enrolled). Windows 11 Setup's hardware checks should genuinely pass, not be worked around — more realistic (an actual enterprise laptop has a real TPM) and avoids the kind of "undocumented registry modification" this project's engineering standards otherwise discourage. `swtpm` is already installed on this host; no new package installs were needed.
+
+Packer's QEMU builder has no native TPM device option and can't spawn a companion process for the VM's lifetime, so `build-windows11.sh` starts `swtpm socket --tpmstate ... --ctrl type=unixio,path=<sock> --tpm2` as a background host process before invoking Packer (same "prepare host resource → invoke packer → clean up on exit via trap" pattern `build.sh` already uses for virtio driver extraction), and the template wires the VM to it via `qemuargs`.
+
+**Media: Windows 11 Enterprise Evaluation, not the Home-edition ISO already on this host.** `~/Downloads/Win11_25H2_English_x64_v2.iso` turned out to be Home/Home N/Home Single Language only (no `EI.CFG`, no Enterprise image) — confirmed by direct `install.wim` inspection before deciding anything, not assumed. Home edition has the hardest-to-automate Microsoft Account/OOBE requirements and can't domain-join at all, a poor match both for unattended automation and for this project's goal of simulating a realistic enterprise machine. The Enterprise Evaluation ISO was fetched instead, via a verified `go.microsoft.com/fwlink` (`linkid=2334167`) that resolves to genuine `CLIENTENTERPRISEEVAL` media — confirmed with a real `curl -I` before trusting it, same discipline as every other download link in this project. `sources/EI.CFG` reports `[EditionID]=EnterpriseEval`, `[Channel]=eval`, `[VL]=0` — same eval-media pattern as Server, and simpler: this WIM has exactly one installable image (`Windows 11 Enterprise Evaluation`), not Server's multi-edition WIM requiring careful `/IMAGE/NAME` matching.
+
+**Fully manual `qemuargs` — the main disk, both CD-ROMs, and both pflash (UEFI) drives are all hand-specified, not left to Packer's native fields.** This is the biggest structural difference from the Server template and exists entirely because of the boot-timing investigation (see Findings below): once *any* qemuargs entry uses `-drive`, Packer replaces *all* of its own auto-generated `-drive` entries (an established project lesson — see `WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md` Finding 2), so a partial override isn't possible; if any drive is manual, they all have to be. This follows a working reference, [github.com/eb4x/packer-qemu-win11](https://github.com/eb4x/packer-qemu-win11), fetched and read directly (not just summarized) before adapting it. Two direct consequences:
+- `cd_files`/`cd_content` (the Server template's driver+unattend delivery mechanism) can't be used — the merged ISO it builds lands at a Packer-chosen temp path with no HCL-visible variable qemuargs could reference. `floppy_content` replaces it for just the small answer file (well within floppy's reliable size range — Finding 7/8 in the Server log found floppy specifically unreliable for *large* files like `NETKVM.SYS`, not small XML). The *raw, unmodified* `virtio-win.iso` is mounted directly as a second CD-ROM instead of a curated `cd_files` subset — its own root layout already puts `vioscsi`/`viostor`/`NetKVM` at the same `<codename>/amd64` depth `cd_files` used to produce, confirmed directly (`xorriso -ls`) before relying on it, so the driver-path structure in the unattend file didn't need to change.
+- `efi_firmware_vars` could **not** be dropped even though the actual pflash attachment is manual — see Finding W1.
+
+---
+
+## Investigation Log
+
+### Finding W1: `efi_firmware_vars` is not optional, even when qemuargs fully overrides drive attachment
+
+**Symptom:** First fully-manual-qemuargs attempt (native `efi_firmware_vars` field removed, on the theory that qemuargs' own pflash `-drive` entry made it redundant) failed in under 5 seconds: `failed to read from efivars file at /usr/share/OVMF/OVMF_VARS.fd: open /usr/share/OVMF/OVMF_VARS.fd: no such file or directory` — before Packer even reached the VNC/boot stage.
+
+**Diagnosis:** Packer's QEMU builder does its own internal efivars pre-flight handling whenever `efi_boot = true`, independent of qemuargs — and when `efi_firmware_vars` isn't set, it falls back to a hardcoded internal default path (`/usr/share/OVMF/OVMF_VARS.fd`, not even the `_4M` variant) that doesn't exist on this host. qemuargs only affects the actual qemu command line; it has no bearing on this earlier, separate internal step.
+
+**Fix:** Keep `efi_firmware_vars` (and `efi_firmware_code`) as native fields, pointing at the Secure-Boot `.ms.fd` variants as originally intended. Packer still does its normal "copy the template to `<output_directory>/efivars.fd`" step; qemuargs' manual pflash `-drive unit=1` entry just points at that same resulting path instead of managing a separate copy. `disk_size` has the same "still matters" property for the same reason (a separate pre-flight `qemu-img create` step, not something qemuargs touches) — kept as a native field too.
+
+### Finding W2: bare `-drive media=cdrom` with no `index=` produced "no bootable device," not a timing miss — a real bug, now fixed
+
+**Symptom:** After fixing W1, the VM reached the boot screen but OVMF reported `BdsDxe: No bootable option or device was found` — not the "press any key to boot from CD or DVD" prompt seen on every other attempt (Server 2022, Server 2025, and later Windows 11 attempts). Firmware never even tried to read the CD-ROM.
+
+**Diagnosis:** Checked against the community before assuming a host-specific bug (per this project's established practice of searching first — see the Server log's Finding 15). An Arch Linux forum thread titled "\[solved\] Qemu drops into a UEFI shell instead of booting CDROM" (bbs.archlinux.org/viewtopic.php?id=212268) reported the identical class of symptom, root-caused to missing `index=` flags on `-drive`/`-device` lines: without an explicit index, QEMU/OVMF's bus assignment for implicit-interface drives can end up ambiguous enough that BDS never enumerates them as boot candidates at all.
+
+**Fix:** Added `index=0` / `index=1` to the two CD-ROM `-drive` entries in `qemuargs`. Confirmed this was the correct fix: the very next attempt no longer hit "no bootable device" — it progressed to the actual "press any key" prompt (Finding W3), meaning the CD-ROM was now being found and its own boot stub invoked. **This is a real, confirmed bug fix, independent of whether Windows 11 ever boots successfully overall** — worth keeping even if this OS target stays shelved, and worth checking first if the *same* "no bootable device" symptom (not the PXE-fallthrough one) ever recurs anywhere else in this project.
+
+### Finding W3: same "press any key" timing-miss as Server 2025, regardless of keystroke strategy — unresolved, matches Finding 15's pattern
+
+**Symptom:** With W1 and W2 both fixed, three different `boot_command` strategies were tried and all three fell through to PXE:
+1. A single `<enter>` with `boot_wait = "1s"` (matching the eb4x reference project exactly).
+2. The same, retried once more for consistency.
+3. This project's own repeated-spacebar mechanism (`boot_wait = "2s"`, 25× `<spacebar><wait1>`) — independently proven reliable across every Server 2022 build this session.
+
+All three failed identically (PXE fallthrough, the same dead end documented in the Server log's Finding 1/Finding 15).
+
+**Diagnosis:** This now matches Server 2025's Finding 15 exactly in shape: both are newer/25H2-era Windows media (Windows 11 build 26200, Server 2025 build 26100+), both reliably miss this project's "press any key" boot-key window regardless of tuning, while Server 2022 (an older media build) has never once failed it across many builds. Strongly suggests a shared root cause tied to *media vintage* rather than something specific to either Server vs. client OS family, or to this template's specific qemuargs construction — but this was not proven directly (no QMP-based screendump timeline was captured for Windows 11's boot sequence, the way was considered but not done for Server 2025 either — see that Finding's own note on this).
+
+**Status: shelved, not fixed — same as Server 2025.** Do not re-attempt a fourth keystroke-timing variant without new evidence; all three tried here, plus the widened-window and boot-order approaches already tried for Server 2025, share essentially the same "guess a different keystroke/timing parameter" shape and none have worked. The templates are left in their most-correct-known state (W1 and W2's fixes both kept) rather than reverted, since those are real, confirmed-good changes independent of the unresolved timing issue — a future attempt (or the next engineer) doesn't have to re-discover them.
+
+---
+
+## Open Issues
+
+1. **The core boot-timing issue (Finding W3) is unresolved and shared with Server 2025.** The most promising unexplored angle, per the Server log's own note: QMP-based direct observation (bypassing Packer entirely, screendumping the VM every ~250-500ms right after boot) to see exactly what's on screen and when, rather than continuing to guess keystroke/timing parameters blindly. Worth doing once, since a real fix here would likely unblock both Server 2025 and Windows 11 simultaneously given how closely the symptom matches across both.
+
+2. **IIS-on-Windows-11 (`Enable-WindowsOptionalFeature` path in `scripts/install-iis.ps1`) has never actually been exercised** — Windows 11 has never successfully booted far enough to reach the provisioning phase. The OS-detection branch (`(Get-ComputerInfo).OsProductType -eq "Server"`) is believed correct but unverified against a real Windows 11 guest.
+
+3. **The `oobeSystem` OOBE settings were carried over unchanged from the Server template** (`HideOnlineAccountScreens`, `SkipUserOOBE`/`SkipMachineOOBE`, etc.) on the assumption that Enterprise Evaluation media, combined with those existing skip flags, wouldn't hit any additional Windows-11-specific consumer OOBE prompts (e.g. a network-connection-required screen, sometimes worked around via a `BypassNRO` registry key in other community writeups). This was never actually tested, since the build never got far enough to reach OOBE. If/when the boot issue is resolved, watch specifically for this on the first successful boot into Setup.
+
+4. **`services.yaml`'s `ad-ds` and `sql-server` roles are Server-only, and nothing currently stops them from being selected for a Windows 11 build.** `run-services.ps1` only skips a role when its script file is *missing* from `scripts/`, not when it's inapplicable to the current OS — since both scripts exist (for the Server builds), listing `ad-ds` or `sql-server` in a Windows 11 build's `services.yaml` would make `install-ad.ps1`/`install-sql-server.ps1` actually attempt to run against a client SKU and almost certainly fail. Don't list either role for a Windows 11 build until/unless an OS-awareness check is added (matching the pattern `install-iis.ps1` already uses).

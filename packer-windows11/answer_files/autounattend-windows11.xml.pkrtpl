@@ -1,31 +1,42 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Rendered by packer's templatefile() from windows-server.pkr.hcl.
+  Rendered by packer's templatefile() from windows11.pkr.hcl.
   Template variables: ${computer_name}, ${admin_password}, ${windows_edition},
   ${virtio_os_dir}
 
-  No <ProductKey> is set: this ISO is evaluation media (sources/EI.CFG says
-  [Channel]=eval) whose images report EDITIONID "ServerStandardEval" etc,
-  not the plain "ServerStandard" edition the published KMS client key
-  (packer's local.product_key) is actually for. Supplying that mismatched
-  key made Setup's OS-selection screen show "No images are available" even
-  though /IMAGE/NAME below exactly matched an image - confirmed by
-  extracting install.wim from the ISO and reading its XML metadata directly.
-  Dropping ProductKey and relying on EI.CFG + the NAME filter fixed it.
+  Closely mirrors packer/answer_files/autounattend.xml.pkrtpl (Windows Server
+  2022/2025) - same disk layout, driver injection, and WinRM enablement
+  mechanics, since those are shared unattend components across Server and
+  Client Windows. Differences specific to Windows 11:
 
-  Disk layout assumes a single UEFI/GPT disk (EFI System Partition + MSR + one
-  NTFS partition) via disk_interface = "virtio-scsi" in the qemu source block.
+  No <ProductKey>: same eval-media pattern as Server (sources/EI.CFG says
+  [EditionID]=EnterpriseEval, [Channel]=eval, [VL]=0). Unlike Server's
+  multi-edition install.wim, this ISO's install.wim has exactly one
+  installable image - <NAME>Windows 11 Enterprise Evaluation</NAME>,
+  <EDITIONID>EnterpriseEval</EDITIONID> - confirmed by direct extraction
+  before writing this, not assumed.
 
-  vioscsi/viostor/NetKVM driver files are bundled onto a second generated
-  CD-ROM (cd_files/cd_content in windows-server.pkr.hcl, cd_label "unattend")
-  alongside this file. Floppy was tried in between and rejected: delivery was
-  flaky specifically for larger files (NETKVM.SYS, 192KB, repeatedly failed
-  `pnputil /add-driver` with "the system cannot find the file specified" even
-  right after `dir A:\` had just listed it; smaller vioscsi/viostor .sys files
-  worked fine) - confirmed live in a running VM. cd_files preserves each
-  directory's own basename at the CD root, hence the nested
-  vioscsi\<virtio_os_dir>\amd64 style paths below (unlike floppy_files, which
-  flattens everything).
+  TPM 2.0 + Secure Boot: satisfied by real hardware (swtpm emulated TPM,
+  Microsoft-signed OVMF Secure Boot vars - see windows11.pkr.hcl), not a
+  registry bypass, so nothing in this file needs to work around Windows 11's
+  hardware checks - Setup should simply pass them.
+
+  virtio-win's driver folder for Windows 11 client is "w11" (not a Server
+  codename like "2k22") - confirmed present (vioscsi/viostor/NetKVM, each
+  with an amd64 subfolder, same depth as Server's) before writing this.
+
+  Driver delivery differs from Server: this build mounts the raw,
+  unmodified virtio-win.iso directly as a second CD-ROM (via qemuargs in
+  windows11.pkr.hcl) instead of a curated cd_files/cd_content subset, since
+  going fully manual on qemuargs for boot-order determinism (see that
+  file's header comment) means Packer's own cd_files mechanism - whose
+  generated ISO lands at a Packer-chosen temp path qemuargs can't
+  reference - isn't usable here. The DriverPaths below are unaffected:
+  virtio-win.iso's own root layout already puts vioscsi/viostor/NetKVM at
+  the same depth cd_files used to produce. The FirstLogonCommand fallback
+  below searches by that raw ISO's own volume label ("virtio-win-0.1.285"),
+  not "unattend" (there is no cd_label here - the answer file itself is
+  delivered via floppy_content, not this CD).
 -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
   <settings pass="windowsPE">
@@ -133,17 +144,6 @@
       <TimeZone>UTC</TimeZone>
       <RegisteredOwner>Windows Lab</RegisteredOwner>
     </component>
-    <!--
-      Microsoft-Windows-PnpCustomizationsWinPE (windowsPE pass, above) only
-      stages drivers WinPE itself needs immediately (vioscsi, to see the disk
-      at all) - it does not carry non-boot-critical drivers into the final
-      installed OS's driver store. Confirmed live: post-install, the
-      virtio-net NIC showed up in `Get-PnpDevice -Status Error` with no
-      driver, and `Get-NetConnectionProfile` was empty, so WinRM's listener
-      (created by FirstLogonCommands below) ended up bound to loopback only
-      - nothing else had an IP. NonWinPE is the component that actually
-      injects a driver into the offline image for later PnP matching.
-    -->
     <component name="Microsoft-Windows-PnpCustomizationsNonWinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
       <DriverPaths>
         <PathAndCredentials wcm:action="add" wcm:keyValue="1">
@@ -195,29 +195,12 @@
           <PlainText>true</PlainText>
         </Password>
       </AutoLogon>
-      <!--
-        Description elements below are deliberately terse (Finding 13
-        suspects an undocumented length limit on <Description>, tripping
-        the oobeSystem parse - the one Description that was ~450 characters
-        is the prime suspect). Longer rationale lives here in comments
-        instead:
-          Order 1: fallback driver install by volume label (CD drive letter
-            isn't predictable), backing up the declarative DriverPaths above.
-          Order 2: waits for a real IP before flipping network category to
-            Private, since WinRM's firewall rules are scoped to Private/Domain.
-          Order 3: enables WinRM over HTTP. winrm.exe's config values must be
-            quoted "true" strings, not PowerShell $true - $true inside a
-            single-quoted string is literal, unparsed text, so Basic and
-            AllowUnencrypted silently stayed false (confirmed live: only
-            Negotiate was offered, winrm get showed both false) until this
-            was fixed.
-      -->
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
           <RequiresUserInput>false</RequiresUserInput>
           <Description>Install virtio drivers (fallback)</Description>
-          <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$vol = $null; for ($i = 0; $i -lt 15 -and -not $vol; $i++) { $vol = Get-Volume -FileSystemLabel 'unattend' -ErrorAction SilentlyContinue; if (-not $vol) { Start-Sleep -Seconds 2 } }; if ($vol) { pnputil /add-driver ($vol.DriveLetter + ':\*.inf') /subdirs /install }"</CommandLine>
+          <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$vol = $null; for ($i = 0; $i -lt 15 -and -not $vol; $i++) { $vol = Get-Volume -FileSystemLabel 'virtio-win-0.1.285' -ErrorAction SilentlyContinue; if (-not $vol) { Start-Sleep -Seconds 2 } }; if ($vol) { pnputil /add-driver ($vol.DriveLetter + ':\*.inf') /subdirs /install }"</CommandLine>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
           <Order>2</Order>

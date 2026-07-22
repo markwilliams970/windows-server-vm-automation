@@ -1,0 +1,4 @@
+services:
+  - iis          # IIS Web Server role + default site
+  # - ad-ds      # Active Directory Domain Services + DNS, new forest/domain
+  # - sql-server # SQL Server 2022 Developer Edition, Mixed Mode auth

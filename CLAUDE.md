@@ -29,9 +29,11 @@ The environment should be disposable and reproducible.
 
 # Implementation Status
 
-Phase 1 (architecture) and Phase 2 (unattended Windows install) are implemented under `packer/`, `build.sh`. Phase 2's detailed engineering log — every bug hit, how each was root-caused, and what's still open — lives in `WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md` at the repo root. Read it before touching `packer/answer_files/autounattend.xml.pkrtpl` or `packer/windows-server.pkr.hcl`; several fixes in there (character encoding in unattend `<Description>` elements, `winrm.exe` boolean config syntax, driver file dependencies, CD-ROM vs. floppy delivery) are non-obvious and easy to accidentally regress.
+**Phase 1** (architecture) and **Phase 2** (unattended Windows install, Server 2022) are implemented and confirmed reliable under `packer/`, `build.sh` — a fully unattended build with no manual intervention has succeeded, including the WinRM auth fix (Finding 12) and the `oobeSystem`/`<Description>`-length fix (Finding 14) that blocked it initially. Windows Server 2025 is implemented but **blocked** on a known, unresolved upstream Packer/QEMU/OVMF boot issue — see Finding 15. Phase 2's detailed engineering log — every bug hit, how each was root-caused, and what's still open — lives in `WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md` at the repo root. Read it before touching `packer/answer_files/autounattend.xml.pkrtpl` or `packer/windows-server.pkr.hcl`; several fixes in there (character encoding/length limits in unattend `<Description>` elements, `winrm.exe` boolean config syntax, driver file dependencies, CD-ROM vs. floppy delivery) are non-obvious and easy to accidentally regress.
 
-Phases 3-5 (Windows role configuration, Datadog integration, lifecycle automation) are not yet implemented. See the "Service Selection" note under Windows Server Configuration Goals below for a design change made before Phase 3 started.
+**Phase 3** (Windows role configuration) is implemented and verified: IIS, AD DS, and SQL Server 2022 Developer Edition all work against the Server 2022 baseline, driven by `services.yaml` per the Service Selection design below. A Windows 11 client track was also attempted for both Phase 2 and Phase 3 (OS-aware `install-iis.ps1`) but is blocked by the same underlying issue as Server 2025 — see `WINDOWS11_UNATTENDED.md`. A separate project, `../windows-auto-build-pipeline/`, is pursuing an offline image-application approach to unblock both; see `HANDOFF_FROM_UNATTENDED_INSTALL.md` there.
+
+**Phases 4-5** (Datadog integration, lifecycle automation) are not yet implemented.
 
 ---
 
@@ -286,23 +288,37 @@ windows-lab/
 
 ├── README.md
 ├── CLAUDE.md
-├── WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md   # Phase 2 engineering log — read before editing autounattend.xml.pkrtpl
-├── services.yaml                              # which roles this build installs (see Service Selection) — Phase 3, not yet implemented
-├── build.sh
+├── WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md   # Phase 2 engineering log (Server 2022/2025) — read before editing packer/answer_files/autounattend.xml.pkrtpl
+├── WINDOWS11_UNATTENDED.md                    # Windows 11 client engineering log — currently blocked, see its Open Issues before touching packer-windows11/
+├── services.yaml                              # which roles this build installs (see Service Selection)
+├── build.sh                                    # Windows Server 2022/2025 build entrypoint
+├── build-windows11.sh                          # Windows 11 client build entrypoint — separate from build.sh, see WINDOWS11_UNATTENDED.md for why
+├── iso_cache/                                  # all cached binary install media (Windows ISOs, virtio-win ISO)
+│   ├── <name>.iso                              # gitignored (*.iso); build.sh/build-windows11.sh check currency vs. public source first
+│   ├── <name>.iso.sha256                       # sha256sum-format checksum sidecar, tracked in git
+│   └── <name>.iso.meta                         # source URL + upstream freshness fingerprint (ETag/version), tracked in git
 
-├── packer/
+├── packer/                            # Windows Server 2022/2025
 │   ├── windows-server.pkr.hcl
 │   ├── variables.pkr.hcl
 │   ├── locals.pkr.hcl                # per-Windows-version defaults (ISO URL/checksum, edition, KMS key)
 │   └── answer_files/
-│       └── autounattend.xml.pkrtpl   # templatefile()-rendered; see the doc above before editing
+│       └── autounattend.xml.pkrtpl   # templatefile()-rendered; see the Phase 2 doc above before editing
+
+├── packer-windows11/                  # Windows 11 client — separate directory, not a third source in packer/
+│   ├── windows11.pkr.hcl             # fully-manual qemuargs (not native fields) for most drives — see WINDOWS11_UNATTENDED.md before editing
+│   ├── variables.pkr.hcl
+│   └── answer_files/
+│       └── autounattend-windows11.xml.pkrtpl
 
 ├── scripts/
-│   ├── install-datadog.ps1
-│   ├── install-iis.ps1
-│   ├── install-ad.ps1
-│   ├── verify.ps1
-│   └── cleanup.ps1
+│   ├── run-services.ps1              # Phase 3 orchestrator — reads services.yaml, dispatches to install-<role>.ps1
+│   ├── install-iis.ps1                # OS-aware: Install-WindowsFeature (Server) vs Enable-WindowsOptionalFeature (client)
+│   ├── install-ad.ps1                 # Server-only; needs the reboot handoff to windows-restart, see run-services.ps1's caller
+│   ├── install-sql-server.ps1         # Server-only
+│   ├── verify-post-reboot.ps1         # always invoked; no-ops unless install-ad.ps1's marker file is present
+│   ├── install-datadog.ps1            # Phase 4, not yet implemented
+│   └── cleanup.ps1                    # Phase 5, not yet implemented
 
 ├── tofu/                # only if OpenTofu ends up providing real value — currently unused, Packer + libvirt suffice
 │   ├── main.tf
@@ -409,7 +425,7 @@ Success criteria:
 
 A Windows Server 2022 VM installs without manual interaction.
 
-**Status:** implemented under `packer/` and `build.sh`. One full build has succeeded end-to-end (with one manual live intervention for a bug since fixed in the template); the very next attempt, with that fix templated in and no manual steps, timed out waiting for WinRM. Not yet confirmed reliably unattended — see the Open Issues section of `WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md` before treating this phase as fully closed out. A clean, undisturbed confirmation run is the next step.
+**Status:** implemented under `packer/` and `build.sh`, and confirmed: a fully unattended build (no manual intervention at any point) completes in ~18 minutes, per `WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`'s Finding 14. Only one such confirmed run exists so far — see that doc's Open Issues before treating reliability as fully proven across many runs. Windows Server 2025 uses the same template but is blocked on a separate, known upstream issue (Finding 15) unrelated to anything in this phase's own scope.
 
 ---
 
@@ -426,6 +442,8 @@ Implement:
 Success criteria:
 
 The Windows server has exactly the services listed in `services.yaml` running — no more, no less. A build with no roles selected still succeeds, producing a bare Windows Server with just the Datadog Agent (Phase 4).
+
+**Status:** implemented and verified under `scripts/`. `run-services.ps1` orchestrates role dispatch from `services.yaml`; `install-iis.ps1` (OS-aware — also usable on Windows 11 client SKUs once that track unblocks), `install-ad.ps1` + `verify-post-reboot.ps1` (AD DS promotion, including the reboot handoff to Packer's `windows-restart` provisioner), and `install-sql-server.ps1` (SQL Server 2022 Developer Edition, Mixed Mode auth) are all independently confirmed working against the Server 2022 baseline. The "no roles selected still succeeds" and "multiple roles together" cases are not yet explicitly tested, only individually.
 
 ---
 

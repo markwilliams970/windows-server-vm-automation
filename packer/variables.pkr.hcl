@@ -32,6 +32,17 @@ variable "virtio_drivers_dir" {
   description = "Local directory containing extracted vioscsi/, viostor/, and NetKVM/ driver trees from virtio-win.iso. build.sh extracts these automatically from VIRTIO_ISO_PATH before invoking packer — this variable should not normally be set by hand."
 }
 
+variable "services_yaml_path" {
+  type        = string
+  description = "Absolute path to the services.yaml controlling which roles this build installs (see CLAUDE.md's Service Selection note). Set by build.sh, defaulting to services.yaml at the repo root."
+}
+
+variable "domain_name" {
+  type        = string
+  default     = "corp.example.internal"
+  description = "FQDN for the new AD forest/domain when ad-ds is selected in services.yaml. Ignored if ad-ds isn't selected. Override via PKR_VAR_domain_name."
+}
+
 variable "product_key" {
   type        = string
   default     = null

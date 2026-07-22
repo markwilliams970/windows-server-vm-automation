@@ -1,10 +1,18 @@
 # Build artifacts — disposable per CLAUDE.md's ephemeral-infrastructure principle
 packer/output/
+packer-windows11/output/
 *.iso
+*.iso.lock
+*.iso.*.part
 *.qcow2
 
 # Claude Code local session/tooling state — machine-specific, not project source
 .claude/
+
+# Local dev-only role-testing harness (baseline snapshot + disposable overlay
+# builds) — not part of the documented build/verify/destroy workflow, see
+# dev/README.md
+dev/
 
 # Editor/OS cruft
 .DS_Store

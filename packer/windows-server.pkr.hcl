@@ -84,6 +84,17 @@ source "qemu" "windows_server" {
   # time. Exact OVMF POST timing before that prompt appears varies by host
   # and isn't predictable, so instead of guessing when to press once, keep
   # pressing spacebar every second for a long window to guarantee overlap.
+  #
+  # windows_version=2025's media reliably fails this same mechanism outright
+  # (falls through to the OVMF UEFI shell every time, even after widening
+  # this window to 1s-wait/60s and forcing an explicit qemu -boot order hint
+  # - both reverted, neither helped) - a known, unresolved upstream issue as
+  # of this writing (hashicorp/packer#13342, #13514; HashiCorp Discuss "QEMU
+  # - Windows unable to boot in UEFI mode" reports the identical FS0/FS1 EFI
+  # Shell symptom with no confirmed fix). See WINDOWS_SERVER_UNATTENDED_
+  # THRU_PHASE2.md's Open Issues for the full investigation. Do not re-widen
+  # this window or re-add qemuargs for 2025 without new evidence - both were
+  # tried and shelved.
   boot_wait    = "2s"
   boot_command = [join("", [for _ in range(25) : "<spacebar><wait1>"])]
 
@@ -94,4 +105,41 @@ source "qemu" "windows_server" {
 build {
   name    = "windows-server"
   sources = ["source.qemu.windows_server"]
+
+  provisioner "file" {
+    source      = var.services_yaml_path
+    destination = "C:/Windows/Temp/services.yaml"
+  }
+
+  provisioner "file" {
+    source      = "${path.root}/../scripts/"
+    destination = "C:/Windows/Temp/scripts"
+  }
+
+  provisioner "powershell" {
+    inline = ["powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\Windows\\Temp\\scripts\\run-services.ps1 -DomainName '${var.domain_name}'"]
+  }
+
+  # Unconditional: Packer can't conditionally include a provisioner based on
+  # a runtime variable (e.g. "only if ad-ds was selected"), and this is a
+  # no-op cost when nothing needed a reboot. install-ad.ps1 deliberately
+  # passes -NoRebootOnCompletion to Install-ADDSForest so its own reboot
+  # happens here, under Packer's control, instead of dropping the WinRM
+  # connection out from under the still-running powershell provisioner
+  # above. A fresh DC's first reboot (SYSVOL/AD DS/DNS service startup) is
+  # slower than a normal Windows reboot, hence the longer timeout than a
+  # bare install would need.
+  provisioner "windows-restart" {
+    restart_timeout = "15m"
+  }
+
+  # Always runs, same "PowerShell decides, HCL stays static" pattern as
+  # run-services.ps1: verify-post-reboot.ps1 checks for a marker file
+  # install-ad.ps1 leaves behind and no-ops if it's not present, so this
+  # step is meaningful only when ad-ds was actually selected. Verification
+  # has to happen here, after the restart above, since AD DS/DNS aren't
+  # fully up until the promotion reboot completes.
+  provisioner "powershell" {
+    inline = ["powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\Windows\\Temp\\scripts\\verify-post-reboot.ps1"]
+  }
 }
