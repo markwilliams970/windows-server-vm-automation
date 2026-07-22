@@ -286,7 +286,8 @@ Use a clear structure similar to:
 ```
 windows-lab/
 
-├── README.md
+├── README.md                                   # quick start: prerequisites, build, services.yaml, verifying a build
+├── ENGINEERING_GUIDE.md                        # script/provisioner mechanism detail, troubleshooting index into the logs below, roadmap
 ├── CLAUDE.md
 ├── WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md   # Phase 2 engineering log (Server 2022/2025) — read before editing packer/answer_files/autounattend.xml.pkrtpl
 ├── WINDOWS11_UNATTENDED.md                    # Windows 11 client engineering log — currently blocked, see its Open Issues before touching packer-windows11/
