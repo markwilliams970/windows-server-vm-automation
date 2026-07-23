@@ -31,10 +31,12 @@ virsh -c qemu:///system list >/dev/null 2>&1 \
 
 # ISO_CACHE_DIR holds all locally-cached binary install media (Windows ISO,
 # virtio-win driver ISO) so repeat builds don't re-fetch multi-GB files
-# unnecessarily. Each cached ISO has two small tracked sidecars, both named
-# "<iso-filename>.<ext>":
+# unnecessarily. It lives one level above this repo (../iso_cache) so it can
+# be shared with the sibling windows-auto-build-pipeline project rather than
+# duplicated per-repo. Each cached ISO has two small tracked sidecars, both
+# named "<iso-filename>.<ext>":
 #   .sha256  standard sha256sum-format checksum of our own cached copy
-#            (verifiable directly: sha256sum -c iso_cache/<name>.sha256)
+#            (verifiable directly: sha256sum -c ../iso_cache/<name>.sha256)
 #   .meta    key=value lines recording the source URL and an upstream
 #            "freshness fingerprint" captured when we last verified/
 #            downloaded this file — an HTTP ETag for the Windows ISO, the
@@ -43,7 +45,7 @@ virsh -c qemu:///system list >/dev/null 2>&1 \
 #            check_windows_iso_cache/check_virtio_iso_cache below.
 # The .iso files themselves are gitignored (*.iso); the sidecars are small
 # text and get tracked.
-ISO_CACHE_DIR="${ISO_CACHE_DIR:-${REPO_ROOT}/iso_cache}"
+ISO_CACHE_DIR="${ISO_CACHE_DIR:-${REPO_ROOT}/../iso_cache}"
 mkdir -p "${ISO_CACHE_DIR}"
 
 WINDOWS_VERSION="${WINDOWS_VERSION:-2022}"

@@ -295,10 +295,10 @@ windows-lab/
 ├── build.sh                                    # Windows Server 2022/2025 build entrypoint
 ├── build-windows11.sh                          # Windows 11 client build entrypoint — separate from build.sh, see WINDOWS11_UNATTENDED.md for why
 ├── register-vm.sh                              # registers an already-built disk as a libvirt domain (virt-manager visibility) — Packer's qemu builder never does this itself; also invoked by build.sh when REGISTER_VM=true
-├── iso_cache/                                  # all cached binary install media (Windows ISOs, virtio-win ISO)
-│   ├── <name>.iso                              # gitignored (*.iso); build.sh/build-windows11.sh check currency vs. public source first
-│   ├── <name>.iso.sha256                       # sha256sum-format checksum sidecar, tracked in git
-│   └── <name>.iso.meta                         # source URL + upstream freshness fingerprint (ETag/version), tracked in git
+../iso_cache/                                  # all cached binary install media (Windows ISOs, virtio-win ISO) — lives one level above this repo (ISO_CACHE_DIR default), shared with the sibling windows-auto-build-pipeline project rather than duplicated per-repo; no longer inside this repo's git tree, so its .sha256/.meta sidecars are no longer version-controlled here (they were previously tracked in-repo — see git history before this move)
+│   ├── <name>.iso                              # build.sh/build-windows11.sh check currency vs. public source first
+│   ├── <name>.iso.sha256                       # sha256sum-format checksum sidecar
+│   └── <name>.iso.meta                         # source URL + upstream freshness fingerprint (ETag/version)
 ├── image_cache/                                # Phase 6, not yet implemented — the post-Phase-2, pre-service-layering snapshot + its timestamp, see Phase 6 below
 │   ├── <profile>.qcow2                         # gitignored (*.qcow2); the captured disk itself
 │   └── <profile>.qcow2.meta                    # snapshot timestamp — builds within 180 days of this reuse the snapshot, builds after it force a fresh install and a new snapshot

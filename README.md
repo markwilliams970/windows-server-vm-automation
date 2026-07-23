@@ -91,8 +91,9 @@ downloads `github.com/hashicorp/qemu` automatically on first run.
 
 ### 3. Disk space and network
 
-- Windows Server 2022 Evaluation ISO: ~5 GB (auto-downloaded and cached under `iso_cache/`).
-- `virtio-win.iso` (VirtIO drivers): under 1 GB (also cached under `iso_cache/`).
+- Windows Server 2022 Evaluation ISO: ~5 GB (auto-downloaded and cached under `../iso_cache/`,
+  shared with the sibling `windows-auto-build-pipeline` project).
+- `virtio-win.iso` (VirtIO drivers): under 1 GB (also cached under `../iso_cache/`).
 - Output VM disk: up to 60 GB provisioned, but qcow2 is thin/compressed — actual builds land
   around 5 GB on disk.
 - If you select the `sql-server` role, `install-sql-server.ps1` downloads the SQL Server 2022
@@ -124,7 +125,7 @@ That's it. `build.sh`:
 
 1. Checks all prerequisites are present (`packer`, `qemu-img`, `virsh`, `xorriso`, `curl`,
    reachable libvirt).
-2. Checks `iso_cache/` for a current Windows Server 2022 ISO and `virtio-win.iso`; downloads and
+2. Checks `../iso_cache/` for a current Windows Server 2022 ISO and `virtio-win.iso`; downloads and
    caches whichever is missing or stale (compared against Microsoft's/fedorapeople.org's
    currently-published versions).
 3. Extracts only the VirtIO driver variant this build needs (`vioscsi`, `viostor`, `NetKVM` for
@@ -194,7 +195,7 @@ as `PKR_VAR_<name>=...` (picked up automatically by Packer for anything defined 
 | Variable | Default | Purpose |
 |---|---|---|
 | `WINDOWS_VERSION` | `2022` | Which profile in `packer/locals.pkr.hcl` to build. `2025` is defined but **blocked** — see Status above. |
-| `ISO_CACHE_DIR` | `iso_cache/` at repo root | Where cached install/driver media lives. |
+| `ISO_CACHE_DIR` | `../iso_cache/` (one level above repo root, shared with `windows-auto-build-pipeline`) | Where cached install/driver media lives. |
 | `WIN_ISO_PATH` / `WIN_ISO_CHECKSUM` | unset | Set both to point at a specific local Windows ISO instead of the cache/download flow. |
 | `VIRTIO_ISO_PATH` | unset | Set to point at a specific local `virtio-win.iso` instead of the cache/download flow. |
 | `SERVICES_YAML_PATH` | `services.yaml` at repo root | Use an alternate services file for a given run. |

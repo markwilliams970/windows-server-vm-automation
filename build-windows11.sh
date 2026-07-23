@@ -33,7 +33,7 @@ virsh -c qemu:///system list >/dev/null 2>&1 \
 [[ -f /usr/share/OVMF/OVMF_CODE_4M.ms.fd && -f /usr/share/OVMF/OVMF_VARS_4M.ms.fd ]] \
   || fail "Secure-Boot OVMF firmware (OVMF_CODE_4M.ms.fd / OVMF_VARS_4M.ms.fd) not found under /usr/share/OVMF/ — needed for Windows 11's Secure Boot requirement to genuinely pass rather than being bypassed"
 
-ISO_CACHE_DIR="${ISO_CACHE_DIR:-${REPO_ROOT}/iso_cache}"
+ISO_CACHE_DIR="${ISO_CACHE_DIR:-${REPO_ROOT}/../iso_cache}"
 mkdir -p "${ISO_CACHE_DIR}"
 
 WIN11_STABLE_URL="https://go.microsoft.com/fwlink/?linkid=2334167&clcid=0x809&culture=en-gb&country=gb"
