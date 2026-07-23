@@ -17,3 +17,6 @@ dev/
 # Editor/OS cruft
 .DS_Store
 *.swp
+
+# Session resumption prompt — local-only handoff notes, not project source
+START_PROMPT.md
