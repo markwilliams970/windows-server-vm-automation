@@ -217,23 +217,45 @@ cleanup, which deletes `packer/output/`).
 
 In priority order, based on what's actually blocking real use of this lab:
 
-### 1. Exercise the untested Phase 3 combinations
+### 1. Combined-role builds: known-failing, root cause paused pending forensics
 
 Every role (`iis`, `ad-ds`, `sql-server`) is confirmed working **individually** against the Server
-2022 baseline. Not yet actually run:
+2022 baseline. The worst-case combination — all three together — was tested twice via
+`dev/test-role.sh` against `dev/baseline/win2022-dc.qcow2` (a `dev/test-services-all.yaml` with
+all three roles uncommented), once at the dev harness's original 8GB memory allocation and once
+at 16GB (matching production's `packer/variables.pkr.hcl` default):
 
-- **Multiple roles in one `services.yaml`** (e.g. `iis` + `sql-server`, or all three). The
-  orchestration mechanism (`run-services.ps1` looping over roles, collecting failures) is written
-  to support this, but no build has exercised it — a real conflict (port/service collision,
-  install order mattering, a shared prerequisite two scripts both assume) can't be ruled out until
-  it's actually tried.
-- **An empty/all-commented `services.yaml`** — the "bare server" path. `run-services.ps1` has an
-  explicit early-exit for zero roles, but it's never been driven by an actual `packer build` run.
-
-Recommended approach: use `dev/test-role.sh` with a throwaway `services.yaml` listing multiple
-roles (a few minutes per iteration against the cached baseline, versus a full ~20-minute install),
-then confirm once with a real `build.sh` run before calling it verified. Update the README's role
-table and this document once done.
+- **Both runs, identical result:** `iis` installs and verifies successfully, `ad-ds` promotion
+  configures successfully, then `sql-server` setup fails with the identical exit code
+  `-2068119551`, at the identical point — roughly 16 minutes in, right after mounting the
+  downloaded SQL Server media and launching `setup.exe`.
+- **Identical failure at both memory levels rules out resource pressure as the cause.** Bumping
+  `dev/role-test.pkr.hcl`'s `memory` from 8192 to 16384 changed nothing.
+- **Leading unconfirmed hypothesis:** SQL Server setup runs while the machine is in AD DS's
+  post-promotion, pre-reboot state. `install-ad.ps1` calls `Install-ADDSForest
+  -NoRebootOnCompletion` deliberately (see "Why `install-ad.ps1` doesn't verify its own work,"
+  above) — the actual reboot only happens later, in Packer's `windows-restart` provisioner, after
+  every role in `run-services.ps1` has run. So by the time `sql-server` installs, the box is in a
+  real, non-default in-between state (DNS Server role just installed, forest configuration written
+  but not yet active) — not nothing, and a plausible source of the interaction.
+- **Root cause is not actually confirmed, only hypothesized** — Packer's default on-error behavior
+  tears down the VM and deletes `dev/output/` the instant a provisioner throws, so the one file
+  that would say what really happened,
+  `C:\Program Files\Microsoft SQL Server\*\Setup Bootstrap\Log\Summary.txt`, has been
+  unrecoverable both times.
+- **This investigation is deliberately paused here.** The worst-case combination has been tried
+  and the failure is documented as a known limitation — not a silent gap — but going from
+  hypothesis to confirmed cause needs the VM preserved on failure, which hasn't been done yet. If
+  picked back up: re-run with `packer build -on-error=abort` added to `dev/test-role.sh` (the VM
+  stays running instead of being torn down) and read `Summary.txt` directly off it — either over
+  WinRM/RDP before manually tearing it down, or by mounting the disk read-only (same NBD procedure
+  `WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`'s Practical Operating Notes already documents for
+  post-mortem forensics on a preserved Phase 2 failure).
+- **Until root-caused, don't select `iis` + `ad-ds` + `sql-server` together** in a real
+  `services.yaml` — README's role table and Status section both flag this.
+- The empty/all-commented `services.yaml` "bare server" path remains untested separately, and is
+  unrelated to this finding — `run-services.ps1` has an explicit early-exit for zero roles, but it
+  has never actually been driven by a real `packer build` run either.
 
 ### 2. Phase 4 — Datadog Agent integration
 

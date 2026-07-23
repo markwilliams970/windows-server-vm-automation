@@ -16,7 +16,7 @@ detail behind each script and what's still open, see [`ENGINEERING_GUIDE.md`](EN
 |---|---|---|
 | 1 | Architecture, repo structure | Done |
 | 2 | Unattended Windows install (Packer + QEMU/KVM) | Done for **Windows Server 2022**. Server 2025 and Windows 11 client are implemented but **blocked** on an unresolved upstream Packer/QEMU UEFI-boot issue — see [`WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`](WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md) Finding 15 and [`WINDOWS11_UNATTENDED.md`](WINDOWS11_UNATTENDED.md). |
-| 3 | Role configuration (IIS, AD DS, SQL Server) via `services.yaml` | Done and independently verified, **one role at a time**, against the Server 2022 baseline. Running multiple roles in the same build, and an empty `services.yaml`, are believed to work but not yet actually exercised — see [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap). |
+| 3 | Role configuration (IIS, AD DS, SQL Server) via `services.yaml` | Done and independently verified, **one role at a time**, against the Server 2022 baseline. The worst-case combination — all three roles together — was tested twice and **fails**: SQL Server setup errors after IIS and AD DS both succeed; root cause not yet confirmed and this investigation is paused for now — see [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap). An empty `services.yaml` remains untested separately. |
 | 4 | Datadog Agent install/validation | Not started. |
 | 5 | Lifecycle automation (build/verify/destroy tooling) | Not started — see [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap). |
 | 6 | Golden snapshot: 180-day build acceleration | Not started — a project goal, not yet designed in implementation detail. See `CLAUDE.md`'s Phase 6 section and [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap) for the proposed mechanism. |
@@ -168,11 +168,12 @@ services:
 | `ad-ds` | `scripts/install-ad.ps1` (+ `scripts/verify-post-reboot.ps1` after the reboot) | Promotes the server to the first Domain Controller of a **new forest**, with DNS installed alongside. Confirms `NTDS`/`DNS` services and `Get-ADDomain` succeed after the promotion reboot. | Yes |
 | `sql-server` | `scripts/install-sql-server.ps1` | Downloads and installs SQL Server 2022 Developer Edition in Mixed Mode auth, confirms `MSSQLSERVER`/`SQLSERVERAGENT` are running, confirms a `SELECT 1` query succeeds over a SQL login. | Yes |
 
-Each was built and confirmed working **individually**. Multiple roles together in one build, and
-the empty-`services.yaml` bare-server path, follow the same orchestration mechanism and are
-expected to work, but haven't actually been run yet — see
-[`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap) if you're the one to try it
-next.
+Each was built and confirmed working **individually**. All three together in one build (`iis` +
+`ad-ds` + `sql-server` — the worst-case combination) was tested and currently **fails**: SQL
+Server setup errors out after IIS and AD DS both succeed. Don't select all three in the same
+`services.yaml` yet — see [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap) for
+what's known about the failure. The empty-`services.yaml` bare-server path remains untested
+separately.
 
 The domain name for `ad-ds` defaults to `corp.example.internal` and can be overridden:
 
