@@ -268,7 +268,35 @@ Not started. Two concrete gaps:
   remove its disk(s), and be safe to run repeatedly (a no-op if there's nothing to destroy),
   matching `CLAUDE.md`'s Destroy lifecycle requirement.
 
-### 4. Server 2025 / Windows 11 (lower priority, blocked on upstream)
+### 4. Phase 6 — golden snapshot (180-day eval window)
+
+Not started; recorded as a project goal per `CLAUDE.md`'s Phase 6 section. Windows Server
+Evaluation media's real ~180-day license window (from install completion, not ISO download) means
+a completed unattended install — the golden snapshot — can be reused as the starting point for a
+lot of rapid Phase 3+ prototyping before it needs to be redone from scratch. This is the real
+payoff: build cycles collapse from ~20-25 minutes of Setup down to however long service-layering
+itself takes.
+
+Proposed mechanism:
+
+- Right after a Phase 2 build finishes (before any Phase 3 role provisioners run), capture the
+  golden snapshot — that clean, unconfigured disk — plus the date/time it was taken. Likely a new
+  `image_cache/` directory, sidecar-metadata pattern mirroring `iso_cache/`'s existing
+  `.sha256`/`.meta` convention (see `build.sh`'s `check_windows_iso_cache`/`download_windows_iso`
+  for the shape to follow — a currency check that falls back to a real rebuild when stale).
+- Any build within the golden snapshot's 180-day window starts from it via a copy-on-write overlay
+  instead of a fresh install — the exact mechanism `dev/role-test.pkr.hcl` already uses
+  (`disk_image = true`, `use_backing_file = true`) for local role-script iteration, just promoted
+  from a dev-only, manually-refreshed harness to a first-class, automatically-aged part of
+  `build.sh` itself.
+- Past 180 days, the golden snapshot expires and the next build does a full install from ISO media
+  again, capturing a fresh one for the next window.
+- Worth deciding at implementation time: whether this shares a mechanism with `dev/baseline`
+  (today unbounded and manually refreshed, per `dev/README.md`) or stays a separate, parallel
+  cache — they solve related but distinct problems (dev-only fast iteration vs. a
+  production-facing, expiring build accelerator).
+
+### 5. Server 2025 / Windows 11 (lower priority, blocked on upstream)
 
 Both are blocked on the same unresolved upstream Packer/QEMU/OVMF UEFI boot-key issue (Finding 15
 / Finding W3) — not something fixable from this project alone without new evidence. The sibling

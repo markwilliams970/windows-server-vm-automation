@@ -33,7 +33,7 @@ The environment should be disposable and reproducible.
 
 **Phase 3** (Windows role configuration) is implemented and verified: IIS, AD DS, and SQL Server 2022 Developer Edition all work against the Server 2022 baseline, driven by `services.yaml` per the Service Selection design below. A Windows 11 client track was also attempted for both Phase 2 and Phase 3 (OS-aware `install-iis.ps1`) but is blocked by the same underlying issue as Server 2025 — see `WINDOWS11_UNATTENDED.md`. A separate project, `../windows-auto-build-pipeline/`, is pursuing an offline image-application approach to unblock both; see `HANDOFF_FROM_UNATTENDED_INSTALL.md` there.
 
-**Phases 4-5** (Datadog integration, lifecycle automation) are not yet implemented.
+**Phases 4-6** (Datadog integration, lifecycle automation, snapshot-based build acceleration) are not yet implemented.
 
 ---
 
@@ -299,6 +299,9 @@ windows-lab/
 │   ├── <name>.iso                              # gitignored (*.iso); build.sh/build-windows11.sh check currency vs. public source first
 │   ├── <name>.iso.sha256                       # sha256sum-format checksum sidecar, tracked in git
 │   └── <name>.iso.meta                         # source URL + upstream freshness fingerprint (ETag/version), tracked in git
+├── image_cache/                                # Phase 6, not yet implemented — the post-Phase-2, pre-service-layering snapshot + its timestamp, see Phase 6 below
+│   ├── <profile>.qcow2                         # gitignored (*.qcow2); the captured disk itself
+│   └── <profile>.qcow2.meta                    # snapshot timestamp — builds within 180 days of this reuse the snapshot, builds after it force a fresh install and a new snapshot
 
 ├── packer/                            # Windows Server 2022/2025
 │   ├── windows-server.pkr.hcl
@@ -475,6 +478,41 @@ Implement:
 Success criteria:
 
 The environment can be repeatedly created and destroyed.
+
+---
+
+# Phase 6: Golden Snapshot (180-Day Eval Window)
+
+Windows Server Evaluation media (this project's install source) carries a real ~180-day
+evaluation license window, counted from the moment Windows finishes installing, not from ISO
+download. A full unattended install costs a real ~20-25 minutes every time it's done from
+scratch — time worth reclaiming, since the base OS install itself rarely needs to change between
+one Phase 3+ prototyping session and the next. The golden snapshot is what makes rapid iteration
+on service-layering and future phases practical: capture the clean install once, then build on
+top of it as many times as needed within its license window.
+
+Implement:
+
+- Immediately after a successful Phase 2 unattended install completes — before any Phase 3
+  service-layering provisioners run — capture the golden snapshot: a copy of that freshly
+  installed, unconfigured disk, plus the date/time it was taken.
+- Any build kicked off within 180 days of that timestamp starts from the golden snapshot instead
+  of a fresh unattended install, then layers Phase 3+ provisioning on top of it — the same
+  copy-on-write-overlay mechanism `dev/test-role.sh`/`dev/role-test.pkr.hcl` already use for fast
+  local role-script iteration, promoted to a first-class part of the real build workflow, with its
+  own currency check in the same spirit as `build.sh`'s existing `iso_cache/` freshness logic (see
+  Repository Structure's `image_cache/` entry). This is the actual speedup: most build cycles skip
+  Setup entirely and start layering services within seconds.
+- Once 180 days have elapsed since the recorded timestamp, the golden snapshot expires — the next
+  build does a full install from clean media again and captures a fresh golden snapshot for the
+  next window.
+
+Success criteria:
+
+A build started on day 179 of a snapshot's window completes materially faster than a from-scratch
+build and produces an environment indistinguishable from one built fresh from ISO media. A build
+started on day 181 (or with no valid snapshot present at all) transparently falls back to a full
+unattended install and captures a new snapshot for the next 180-day window.
 
 ---
 

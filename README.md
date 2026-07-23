@@ -19,6 +19,7 @@ detail behind each script and what's still open, see [`ENGINEERING_GUIDE.md`](EN
 | 3 | Role configuration (IIS, AD DS, SQL Server) via `services.yaml` | Done and independently verified, **one role at a time**, against the Server 2022 baseline. Running multiple roles in the same build, and an empty `services.yaml`, are believed to work but not yet actually exercised — see [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap). |
 | 4 | Datadog Agent install/validation | Not started. |
 | 5 | Lifecycle automation (build/verify/destroy tooling) | Not started — see [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap). |
+| 6 | Golden snapshot: 180-day build acceleration | Not started — a project goal, not yet designed in implementation detail. See `CLAUDE.md`'s Phase 6 section and [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap) for the proposed mechanism. |
 
 **Practical takeaway:** this project reliably builds a real Windows Server 2022 VM with any one
 of IIS, Active Directory Domain Services, or SQL Server 2022 today. Everything else below
