@@ -184,51 +184,6 @@ concern, per `CLAUDE.md`'s tool-responsibility split).
 
 ---
 
-## Watching a VM boot: `tools/qmp-screenshot.py` / `tools/qmp-watch.sh`
-
-Adopted directly from the sibling project (`../windows-auto-build-pipeline/tools/`), whose
-`CLAUDE.md` documents the full reasoning — this project's copy is the same ~50-line wrapper
-around QEMU's own protocol, not a reimplementation.
-
-**What it replaces:** this project's own Practical Operating Notes (in
-`WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`) warn that connecting a VNC client while
-`boot_command` is being typed can knock Packer's own automated connection off the single VNC
-client QEMU supports — you're stuck either not looking, or risking the build. QEMU exposes a JSON
-control channel, QMP, over a Unix socket; any `qemu-system-x86_64` process started with
-`-qmp unix:/path/to/qmp.sock,server,nowait` accepts a `screendump` command that writes the current
-framebuffer straight to a PNG on disk — no VNC client, no window, no display session, and no risk
-of interfering with anything Packer is doing.
-
-- **`tools/qmp-screenshot.py --socket <qmp.sock> --out <shot.png>`** — one-shot capture. Stdlib
-  only (`socket` + `json`), no dependencies. Confirmed working here against a real
-  `qemu-system-x86_64` instance (QMP `screendump` producing a real PNG).
-- **`tools/qmp-watch.sh <qmp.sock> <output-dir> [interval-seconds] [count]`** — loops the above,
-  writing timestamped stills, for watching a boot sequence unfold frame-by-frame instead of
-  guessing at keystroke/timing parameters blindly (exactly the kind of question Finding 1's UEFI
-  "press any key" timing and Finding 15's still-unresolved Server 2025 boot failure raise).
-
-**Known gotcha:** Unix domain socket paths have a hard 108-byte kernel limit. Keep QMP socket
-paths short and directly under `/tmp/` (e.g. `/tmp/win2022-debug.sock`) — a path nested under a
-long session-scoped scratchpad directory will exceed the limit and fail with
-`UNIX socket path ... is too long`.
-
-**Caveat — does not cover `build.sh`'s actual Packer-managed build.** Packer's QEMU builder
-plugin has no native QMP option, and this project's own `windows-server.pkr.hcl` deliberately
-never sets `qemuargs` — Finding 2 in `WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md` established that
-`qemuargs` silently replaces Packer's own `-drive` arguments wholesale (not just appends), and
-broke VM boot outright the one time it was tried. Adding `-qmp` to a Packer-driven build here
-would mean reconstructing Packer's entire generated QEMU argument list by hand, re-opening exactly
-the problem Finding 2 already closed — not worth it for a debugging convenience. These tools are
-for **ad hoc `qemu-system-x86_64` invocations run directly**, outside Packer: e.g. manually
-reproducing a boot to diagnose a Finding-1/Finding-15-style timing issue, or inspecting a disk
-built by `build.sh` when booted standalone (see [Registering the VM with
-virt-manager](README.md#registering-the-vm-with-virt-manager) for the more common way to interact
-with a finished build — that path goes through libvirt, not a raw `qemu-system-x86_64` command, so
-it doesn't apply there either; add `-qmp` yourself to a manual `qemu-system-x86_64` command line if
-you need to watch one of those boot too).
-
----
-
 ## Troubleshooting index
 
 If a build fails, check whether it's a known, already-root-caused issue before re-investigating
