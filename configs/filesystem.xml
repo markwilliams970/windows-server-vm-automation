@@ -1,0 +1,8 @@
+    <filesystem type='mount' accessmode='passthrough'>
+      <driver type='virtiofs'/>
+      <binary path='/usr/libexec/virtiofsd'/>
+      <source dir='/home/markw/Documents/VirtualMachines/Shares/windows11vm-t14'/>
+      <target dir='windwows11vm-t14-share'/>
+      <alias name='fs0'/>
+      <address type='pci' domain='0x0000' bus='0x06' slot='0x00' function='0x0'/>
+    </filesystem>
