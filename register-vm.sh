@@ -126,6 +126,12 @@ cat > "${DOMAIN_XML}" <<EOF
     <video>
       <model type='qxl'/>
     </video>
+    <!-- Without this, libvirt defaults to a relative PS/2 mouse, which
+         desyncs from the VNC/SPICE client's absolute cursor position and
+         makes the console unusable (clicks land somewhere other than the
+         visible cursor). A USB tablet reports absolute coordinates, so
+         guest and client cursors always agree. -->
+    <input type='tablet' bus='usb'/>
   </devices>
 </domain>
 EOF
