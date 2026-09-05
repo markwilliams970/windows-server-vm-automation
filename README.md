@@ -38,8 +38,12 @@ Written for a clean Ubuntu/Debian-family host (developed and tested on Linux Min
 ```bash
 sudo apt update
 sudo apt install qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients \
-    bridge-utils ovmf xorriso curl
+    bridge-utils ovmf xorriso curl p7zip-full
 ```
+
+`p7zip-full` (provides `7z`) is only actually used for `WINDOWS_VERSION=2025` builds — `build.sh`
+checks for it and fails fast with a clear message if it's missing and you build 2025 without it.
+Harmless to install either way.
 
 Add yourself to the groups that let you talk to libvirt/KVM without `sudo`, then **log out and
 back in** (group membership only takes effect in a new login session):
@@ -90,8 +94,15 @@ packer version   # this project was built/tested against v1.15.4
 You do **not** need to manually install the QEMU plugin — `build.sh` runs `packer init`, which
 downloads `github.com/hashicorp/qemu` automatically on first run.
 
-### 3. Disk space and network
+### 3. Host memory, CPU, and disk space
 
+- **Memory:** the VM defaults to 16 GB (`memory_size`, overridable via `PKR_VAR_memory_size`) —
+  your host needs that much free *on top of* whatever it needs for itself and anything else
+  running. 16 GB total on the host is not enough; budget for 24-32 GB or lower `memory_size` for a
+  smaller/shared host.
+- **CPU:** the VM defaults to 4 vCPUs (`cpus`, overridable via `PKR_VAR_cpus`) — KVM can safely
+  oversubscribe cores, so this matters far less than memory, but a single-core host will build
+  noticeably slower.
 - Windows Server 2022 Evaluation ISO: ~5 GB; Server 2025's is larger, ~8.5 GB (both
   auto-downloaded and cached under `../iso_cache/`, shared with the sibling
   `windows-auto-build-pipeline` project).
@@ -107,6 +118,10 @@ downloads `github.com/hashicorp/qemu` automatically on first run.
   several more minutes for that role specifically.
 - Outbound internet access is required (Microsoft's Windows ISO fwlink, the virtio-win stable
   release, and — if `sql-server` is selected — Microsoft's SQL Server bootstrapper).
+
+See [`ISO_CACHE_INVENTORY.md`](ISO_CACHE_INVENTORY.md) for the exact files, sizes, and checksums
+currently cached under `../iso_cache/` — including a few files there that belong to the sibling
+project and aren't touched by this one, since the directory is shared.
 
 ### 4. Optional: GitHub CLI
 
@@ -331,6 +346,8 @@ annotated tree.
 - [`CLAUDE.md`](CLAUDE.md) — project purpose, architectural principles, phased plan.
 - [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md) — how each script/provisioner actually works, a
   troubleshooting index into the engineering logs below, and the roadmap for what's left.
+- [`ISO_CACHE_INVENTORY.md`](ISO_CACHE_INVENTORY.md) — exactly what's cached under the shared
+  `../iso_cache/` directory, with sizes, checksums, and sources.
 - [`WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`](WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md) — the
   full Phase 2 investigation log (every bug hit building the Server 2022/2025 unattended install,
   root-caused). Read before touching `packer/answer_files/autounattend.xml.pkrtpl` or

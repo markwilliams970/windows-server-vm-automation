@@ -285,11 +285,12 @@ windows-lab/
 ├── CLAUDE.md
 ├── WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md   # Phase 2 engineering log (Server 2022/2025) — read before editing packer/answer_files/autounattend.xml.pkrtpl
 ├── WINDOWS11_UNATTENDED.md                    # Windows 11 client engineering log — currently blocked, see its Open Issues before touching packer-windows11/
+├── ISO_CACHE_INVENTORY.md                     # point-in-time record of ../iso_cache/'s actual contents (sizes, checksums, sources) — regenerate when the cache changes, don't hand-edit
 ├── services.yaml                              # which roles this build installs (see Service Selection)
 ├── build.sh                                    # Windows Server 2022/2025 build entrypoint
 ├── build-windows11.sh                          # Windows 11 client build entrypoint — separate from build.sh, see WINDOWS11_UNATTENDED.md for why
 ├── register-vm.sh                              # registers an already-built disk as a libvirt domain (virt-manager visibility) — Packer's qemu builder never does this itself; also invoked by build.sh when REGISTER_VM=true
-../iso_cache/                                  # all cached binary install media (Windows ISOs, virtio-win ISO) — lives one level above this repo (ISO_CACHE_DIR default), shared with the sibling windows-auto-build-pipeline project rather than duplicated per-repo; no longer inside this repo's git tree, so its .sha256/.meta sidecars are no longer version-controlled here (they were previously tracked in-repo — see git history before this move)
+../iso_cache/                                  # all cached binary install media (Windows ISOs, virtio-win ISO) — lives one level above this repo (ISO_CACHE_DIR default), shared with the sibling windows-auto-build-pipeline project rather than duplicated per-repo; no longer inside this repo's git tree, so its .sha256/.meta sidecars are no longer version-controlled here (they were previously tracked in-repo — see git history before this move). ISO_CACHE_INVENTORY.md above is the version-controlled record of what's actually in it.
 │   ├── <name>.iso                              # build.sh/build-windows11.sh check currency vs. public source first
 │   ├── <name>.iso.sha256                       # sha256sum-format checksum sidecar
 │   └── <name>.iso.meta                         # source URL + upstream freshness fingerprint (ETag/version)
