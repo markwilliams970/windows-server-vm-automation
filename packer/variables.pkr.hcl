@@ -13,6 +13,18 @@ variable "vm_name" {
   type        = string
   default     = null
   description = "Used for the VM/output directory name and as the guest's ComputerName. Defaults to \"win<windows_version>-dc\" if unset."
+
+  # NetBIOS hard-caps ComputerName at 15 characters. Packer itself doesn't
+  # enforce this — Setup just fails partway through with a generic
+  # "restarted unexpectedly ... installation cannot proceed" dialog and no
+  # other clue, which cost real time to root-cause against Server 2025
+  # (confirmed live). build.sh has this same check for its own default-name
+  # computation; this one catches a direct `packer build -var vm_name=...`
+  # that bypasses build.sh entirely.
+  validation {
+    condition     = var.vm_name == null || length(var.vm_name) <= 15
+    error_message = "The vm_name variable must be 15 characters or fewer: it's used as the guest's ComputerName, and NetBIOS has a hard limit there."
+  }
 }
 
 variable "iso_url" {

@@ -1,8 +1,8 @@
 # Windows Server VM Automation
 
-Fully unattended Windows Server 2022 lab builds on local KVM/libvirt: clean install media in,
-a configured, validated Windows Server VM out — no manual installer clicks, no golden image,
-disposable by design.
+Fully unattended Windows Server lab builds (2022 and 2025) on local KVM/libvirt: clean install
+media in, a configured, validated Windows Server VM out — no manual installer clicks, no golden
+image, disposable by design.
 
 This README is the quick-start: install prerequisites, run a build, understand what you get.
 For *why* the project is built this way, see [`CLAUDE.md`](CLAUDE.md). For the deep engineering
@@ -15,14 +15,15 @@ detail behind each script and what's still open, see [`ENGINEERING_GUIDE.md`](EN
 | Phase | What it is | Status |
 |---|---|---|
 | 1 | Architecture, repo structure | Done |
-| 2 | Unattended Windows install (Packer + QEMU/KVM) | Done for **Windows Server 2022**. Server 2025 and Windows 11 client are implemented but **blocked** on an unresolved upstream Packer/QEMU UEFI-boot issue — see [`WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`](WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md) Finding 15 and [`WINDOWS11_UNATTENDED.md`](WINDOWS11_UNATTENDED.md). |
-| 3 | Role configuration (IIS, AD DS, SQL Server) via `services.yaml` | Done and independently verified, **one role at a time**, against the Server 2022 baseline. The worst-case combination — all three roles together — was tested twice and **fails**: SQL Server setup errors after IIS and AD DS both succeed; root cause not yet confirmed and this investigation is paused for now — see [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap). An empty `services.yaml` remains untested separately. |
+| 2 | Unattended Windows install (Packer + QEMU/KVM) | Done for **Windows Server 2022 and 2025**. Server 2025 was blocked for a time on an unresolved upstream Packer/QEMU UEFI-boot issue, now resolved by routing around it (a `_noprompt`-patched ISO + `-cpu host`) rather than by any upstream fix — see [`WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`](WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md) Finding 15's resolution writeup. Windows 11 client remains **blocked** on a related but separate issue — see [`WINDOWS11_UNATTENDED.md`](WINDOWS11_UNATTENDED.md). |
+| 3 | Role configuration (IIS, AD DS, SQL Server) via `services.yaml` | Done and independently verified, **one role at a time**, against the Server 2022 baseline (`iis` also independently verified against Server 2025 — see Phase 2 row above). The worst-case combination — all three roles together — was tested twice against Server 2022 and **fails**: SQL Server setup errors after IIS and AD DS both succeed; root cause not yet confirmed and this investigation is paused for now — see [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap). An empty `services.yaml` remains untested separately. |
 | 4 | Datadog Agent install/validation | Not started. |
 | 5 | Lifecycle automation (build/verify/destroy tooling) | Not started — see [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap). |
 | 6 | Golden snapshot: 180-day build acceleration | Not started — a project goal, not yet designed in implementation detail. See `CLAUDE.md`'s Phase 6 section and [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap) for the proposed mechanism. |
 
-**Practical takeaway:** this project reliably builds a real Windows Server 2022 VM with any one
-of IIS, Active Directory Domain Services, or SQL Server 2022 today. Everything else below
+**Practical takeaway:** this project reliably builds a real Windows Server 2022 or 2025 VM with
+any one of IIS, Active Directory Domain Services, or SQL Server 2022 today (`iis` confirmed on
+both versions; `ad-ds`/`sql-server` confirmed on 2022 only so far). Everything else below
 documents that working path.
 
 ---
@@ -91,11 +92,16 @@ downloads `github.com/hashicorp/qemu` automatically on first run.
 
 ### 3. Disk space and network
 
-- Windows Server 2022 Evaluation ISO: ~5 GB (auto-downloaded and cached under `../iso_cache/`,
-  shared with the sibling `windows-auto-build-pipeline` project).
+- Windows Server 2022 Evaluation ISO: ~5 GB; Server 2025's is larger, ~8.5 GB (both
+  auto-downloaded and cached under `../iso_cache/`, shared with the sibling
+  `windows-auto-build-pipeline` project).
 - `virtio-win.iso` (VirtIO drivers): under 1 GB (also cached under `../iso_cache/`).
+- **Server 2025 only:** `build.sh` also derives a `_noprompt`-patched copy of the cached Server
+  2025 ISO (another ~8.5 GB) under `../iso_cache/derived/`, built once and reused across builds —
+  see [`WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`](WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md)
+  Finding 15's resolution writeup for why this exists.
 - Output VM disk: up to 60 GB provisioned, but qcow2 is thin/compressed — actual builds land
-  around 5 GB on disk.
+  around 5-13 GB on disk depending on version and roles selected.
 - If you select the `sql-server` role, `install-sql-server.ps1` downloads the SQL Server 2022
   Developer Edition installer *inside the guest* during the build — budget several more GB and
   several more minutes for that role specifically.
@@ -119,17 +125,23 @@ cd windows-server-vm-automation
 ${EDITOR:-vi} services.yaml
 
 ./build.sh
+
+# Or, for Windows Server 2025 instead of the default 2022:
+WINDOWS_VERSION=2025 ./build.sh
 ```
 
 That's it. `build.sh`:
 
 1. Checks all prerequisites are present (`packer`, `qemu-img`, `virsh`, `xorriso`, `curl`,
-   reachable libvirt).
-2. Checks `../iso_cache/` for a current Windows Server 2022 ISO and `virtio-win.iso`; downloads and
-   caches whichever is missing or stale (compared against Microsoft's/fedorapeople.org's
-   currently-published versions).
-3. Extracts only the VirtIO driver variant this build needs (`vioscsi`, `viostor`, `NetKVM` for
-   Server 2022) from the cached `virtio-win.iso`.
+   reachable libvirt; `7z` too, if `WINDOWS_VERSION=2025`).
+2. Checks `../iso_cache/` for a current Windows Server ISO (2022 or 2025, per `WINDOWS_VERSION`)
+   and `virtio-win.iso`; downloads and caches whichever is missing or stale (compared against
+   Microsoft's/fedorapeople.org's currently-published versions). For 2025 specifically, also
+   derives a `_noprompt`-patched copy of that ISO (cached separately, reused across builds) — see
+   [`WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`](WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md) Finding
+   15's resolution writeup for why.
+3. Extracts only the VirtIO driver variant this build needs (`vioscsi`, `viostor`, `NetKVM` for the
+   selected Windows version) from the cached `virtio-win.iso`.
 4. Runs `packer validate` then `packer build` against `packer/windows-server.pkr.hcl`, which:
    - Boots a UEFI QEMU/KVM VM from the Windows ISO plus a second, Packer-generated CD-ROM
      carrying `autounattend.xml` and the VirtIO drivers.
@@ -143,11 +155,14 @@ That's it. `build.sh`:
 5. Leaves the finished VM disk under `packer/output/<vm_name>/`.
 
 A build with no roles selected in `services.yaml` (or the file emptied to just comments) still
-completes — it produces a bare Windows Server 2022 VM with no roles installed.
+completes — it produces a bare Windows Server VM (2022 or 2025) with no roles installed.
 
-**Expected build time:** roughly 20–25 minutes for a bare build or one role, per
+**Expected build time:** roughly 20–25 minutes for a Server 2022 bare build or one role, per
 [`WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`](WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md)'s measured
-runs. `sql-server` adds real extra time for its in-guest download+install step.
+runs. Server 2025 measured somewhat longer in its own confirming runs — ~34 minutes bare, ~1h11m
+with `iis` selected (larger media, and `qemu-img convert`'s final compression step scales with how
+much data is actually on disk). `sql-server` adds real extra time for its in-guest download+install
+step on either version.
 
 ---
 
@@ -165,16 +180,19 @@ services:
 
 | Role | Script | What it does | Verified standalone? |
 |---|---|---|---|
-| `iis` | `scripts/install-iis.ps1` | Installs the IIS Web Server role, confirms `W3SVC` is running, confirms the default site returns HTTP 200. | Yes |
-| `ad-ds` | `scripts/install-ad.ps1` (+ `scripts/verify-post-reboot.ps1` after the reboot) | Promotes the server to the first Domain Controller of a **new forest**, with DNS installed alongside. Confirms `NTDS`/`DNS` services and `Get-ADDomain` succeed after the promotion reboot. | Yes |
-| `sql-server` | `scripts/install-sql-server.ps1` | Downloads and installs SQL Server 2022 Developer Edition in Mixed Mode auth, confirms `MSSQLSERVER`/`SQLSERVERAGENT` are running, confirms a `SELECT 1` query succeeds over a SQL login. | Yes |
+| `iis` | `scripts/install-iis.ps1` | Installs the IIS Web Server role, confirms `W3SVC` is running, confirms the default site returns HTTP 200. | Yes — **both** Server 2022 and 2025 |
+| `ad-ds` | `scripts/install-ad.ps1` (+ `scripts/verify-post-reboot.ps1` after the reboot) | Promotes the server to the first Domain Controller of a **new forest**, with DNS installed alongside. Confirms `NTDS`/`DNS` services and `Get-ADDomain` succeed after the promotion reboot. | Yes, Server 2022 only so far |
+| `sql-server` | `scripts/install-sql-server.ps1` | Downloads and installs SQL Server 2022 Developer Edition in Mixed Mode auth, confirms `MSSQLSERVER`/`SQLSERVERAGENT` are running, confirms a `SELECT 1` query succeeds over a SQL login. | Yes, Server 2022 only so far |
 
-Each was built and confirmed working **individually**. All three together in one build (`iis` +
-`ad-ds` + `sql-server` — the worst-case combination) was tested and currently **fails**: SQL
-Server setup errors out after IIS and AD DS both succeed. Don't select all three in the same
-`services.yaml` yet — see [`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap) for
-what's known about the failure. The empty-`services.yaml` bare-server path remains untested
-separately.
+Each was built and confirmed working **individually** against Server 2022. All three together in
+one build (`iis` + `ad-ds` + `sql-server` — the worst-case combination) was tested against Server
+2022 and currently **fails**: SQL Server setup errors out after IIS and AD DS both succeed. Don't
+select all three in the same `services.yaml` yet — see
+[`ENGINEERING_GUIDE.md`](ENGINEERING_GUIDE.md#next-steps--roadmap) for what's known about the
+failure. The empty-`services.yaml` bare-server path is confirmed working on **Server 2025**
+specifically (its own boot-only confirming run — see
+[`WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`](WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md) Finding 15's
+resolution writeup) but remains untested separately on Server 2022.
 
 The domain name for `ad-ds` defaults to `corp.example.internal` and can be overridden:
 
@@ -194,7 +212,7 @@ as `PKR_VAR_<name>=...` (picked up automatically by Packer for anything defined 
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `WINDOWS_VERSION` | `2022` | Which profile in `packer/locals.pkr.hcl` to build. `2025` is defined but **blocked** — see Status above. |
+| `WINDOWS_VERSION` | `2022` | Which profile in `packer/locals.pkr.hcl` to build — `2022` or `2025`, both fully supported. |
 | `ISO_CACHE_DIR` | `../iso_cache/` (one level above repo root, shared with `windows-auto-build-pipeline`) | Where cached install/driver media lives. |
 | `WIN_ISO_PATH` / `WIN_ISO_CHECKSUM` | unset | Set both to point at a specific local Windows ISO instead of the cache/download flow. |
 | `VIRTIO_ISO_PATH` | unset | Set to point at a specific local `virtio-win.iso` instead of the cache/download flow. |
@@ -213,7 +231,7 @@ as `PKR_VAR_<name>=...` (picked up automatically by Packer for anything defined 
 | `headless` | `true` | Set `false` to see the QEMU display (e.g. via `virt-viewer`) during a build. |
 | `winrm_timeout` | `45m` | How long Packer waits for WinRM to come up before failing. |
 | `efi_firmware_code` / `efi_firmware_vars` | `/usr/share/OVMF/OVMF_CODE_4M.fd` / `OVMF_VARS_4M.fd` | Override if your distro's `ovmf` package uses different filenames. |
-| `vm_name` | `win<version>-dc` | Output directory/computer name. |
+| `vm_name` | `win<version>-dc` | Output directory/computer name. **Must be 15 characters or fewer** — it's also the guest's NetBIOS `ComputerName`, which has a hard limit there; both `build.sh` and this variable's own validation reject anything longer before wasting a build cycle on it. |
 | `iso_url` / `iso_checksum` / `product_key` / `windows_edition` / `virtio_os_dir` | per-version defaults in `locals.pkr.hcl` | Advanced per-field overrides — most people won't need these. |
 
 Example combining both:
@@ -318,4 +336,7 @@ annotated tree.
   root-caused). Read before touching `packer/answer_files/autounattend.xml.pkrtpl` or
   `packer/windows-server.pkr.hcl`.
 - [`WINDOWS11_UNATTENDED.md`](WINDOWS11_UNATTENDED.md) — the parallel Windows 11 client
-  investigation, currently blocked on the same underlying issue as Server 2025.
+  investigation, still blocked on the same underlying UEFI boot-key symptom Server 2025 hit
+  (Finding 15) — that finding's resolution (a `_noprompt`-patched ISO + `-cpu host`) hasn't been
+  tried against Windows 11 in this project yet, though it's the natural next thing to attempt here
+  given how closely the symptom matches.

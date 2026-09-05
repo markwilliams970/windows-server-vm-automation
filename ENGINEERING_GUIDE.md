@@ -42,6 +42,11 @@ build.sh
        └─ shutdown_command → qemu-img convert -c compresses the final qcow2
 ```
 
+This is `windows_version=2022`'s flow. `2025` differs only at the top: `build.sh` swaps in a
+`_noprompt`-patched ISO (CD 1 needs no keystroke at all, so `boot_command` is empty) and
+`packer/locals.pkr.hcl` adds `-cpu host` — see Finding 15's resolution writeup in
+`WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`. Everything from Windows Setup onward is identical.
+
 ### Why the reboot provisioner always runs, even if `ad-ds` wasn't selected
 
 Packer's HCL provisioner list is static — it can't be conditionally included based on a value
@@ -149,6 +154,19 @@ precondition most downstream Datadog SQL Server integration testing will need.
   `.pdb` (debug symbols) get filtered out of that — see `windows-server.pkr.hcl`'s comment on why
   more aggressive filtering isn't safe (`netkvm.inf`'s `CopyFiles` directive needs `netkvmp.exe`
   alongside `netkvm.sys`, a dependency that cost real debugging time when deleted).
+- **`windows_version=2025` gets one extra cache layer:** `build_noprompt_iso` derives a
+  `_noprompt`-patched copy of the cached stock ISO (swapping in Microsoft's own boot files that
+  skip the "press any key" prompt — see Finding 15's resolution) under `../iso_cache/derived/`,
+  keyed off the stock ISO's own checksum rather than re-verified independently. `7z`, not `xorriso`,
+  does the extraction here specifically — this media is UDF-formatted, and `xorriso`'s `-osirrox`
+  extraction only reads the ISO9660 tree by default (confirmed live: it sees nothing but a stray
+  `README.TXT` stub). `xorriso -as mkisofs` still does the rebuild.
+- **`vm_name` gets checked against NetBIOS's 15-character `ComputerName` limit before any ISO work
+  starts**, for both Windows versions — Setup fails with a generic, unhelpful error partway through
+  a real install otherwise, which cost real debugging time against Server 2025 (see Finding 15's
+  resolution writeup for the full story of the wrong turn this caused). `packer/variables.pkr.hcl`'s
+  own `vm_name` validation catches the same thing for a direct `packer build` that bypasses this
+  script entirely.
 
 ---
 
@@ -191,7 +209,9 @@ from scratch. Findings are in `WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md` unless 
 
 | Symptom | Likely cause | See |
 |---|---|---|
-| VM never boots off the install ISO at all; falls through to PXE/UEFI shell | UEFI "press any key" timing miss | Finding 1 (Server 2022 — fixed by the spacebar-spam `boot_command`); Finding 15 / `WINDOWS11_UNATTENDED.md` Finding W3 (Server 2025 / Win11 — **unresolved**, do not re-tune `boot_wait`/`boot_command` without new evidence) |
+| VM never boots off the install ISO at all; falls through to PXE/UEFI shell | UEFI "press any key" timing miss | Finding 1 (Server 2022 — fixed by the spacebar-spam `boot_command`); Finding 15 (Server 2025 — **RESOLVED**: `_noprompt`-patched ISO + `-cpu host`, see that finding's resolution writeup); `WINDOWS11_UNATTENDED.md` Finding W3 (Windows 11 — still **unresolved** in this project's own `packer-windows11/` track, but the Finding 15 fix hasn't been tried there yet — see roadmap item 5) |
+| VM gets past boot but resets back to the OVMF/TianoCore splash on a repeating cycle, never reaching Setup's GUI | Missing `-cpu host` (Server 2025 only — packer's default qemu64 CPU model isn't enough for 2025's stricter Setup checks) | Finding 15's resolution writeup |
+| Generic "The computer restarted unexpectedly ... Windows installation cannot proceed" dialog partway through a real install | `vm_name`/`ComputerName` over NetBIOS's 15-character limit — **not** a CD-ROM/device-wiring issue, despite how it looks | Finding 15's resolution writeup (this is the one with the real methodology-mistake writeup — read it before assuming device wiring) |
 | Whole VM fails to start, weird `-drive` errors | `qemuargs` used instead of native fields | Finding 2 |
 | Copied driver files present on the CD but `pnputil`/Setup can't read them | Permission bits or read timing | Finding 3 (xorriso read-only inheritance), Finding 7 (media not immediately readable) |
 | Two QEMU processes, VNC behaving strangely | Orphaned process from a prior run | Finding 4 — always `ps aux \| grep qemu-system-x86_64` before a new build |
@@ -268,9 +288,7 @@ Not started. Per `CLAUDE.md`'s requirements:
   is meant to be — CLAUDE.md is explicit that it's installed regardless of `services.yaml`
   role selection), using Datadog's official Windows install script/MSI.
 - Validation needs to be real, not just "service exists": service running, `datadog-agent status`
-  reporting healthy, and connectivity/host-registration confirmed against the configured `DD_SITE`
-  (e.g. `ddog-gov.com` for GovCloud scenarios — see `CLAUDE.md`'s FedRAMP/GovCloud framing for why
-  that matters here specifically).
+  reporting healthy, and connectivity/host-registration confirmed against the configured `DD_SITE`.
 - This is a good candidate for its own `tests/verify-datadog.ps1` (see Phase 5 below) so Datadog
   health can be checked standalone, not only inline during the build.
 
@@ -318,12 +336,26 @@ Proposed mechanism:
   cache — they solve related but distinct problems (dev-only fast iteration vs. a
   production-facing, expiring build accelerator).
 
-### 5. Server 2025 / Windows 11 (lower priority, blocked on upstream)
+### 5. Windows 11 (lower priority, blocked on upstream — but with an untried, promising lead)
 
-Both are blocked on the same unresolved upstream Packer/QEMU/OVMF UEFI boot-key issue (Finding 15
-/ Finding W3) — not something fixable from this project alone without new evidence. The sibling
-project, `../windows-auto-build-pipeline/`, is independently pursuing an offline image-application
-approach (WinPE + direct disk apply, bypassing Setup.exe's boot path entirely) to unblock this; see
-its `START_PROMPT.md` for current status before duplicating that investigation here. Not worth
-picking back up on this side without a genuinely new lead — see the "Do not re-attempt" notes on
-both relevant Findings.
+Finding W3 in `WINDOWS11_UNATTENDED.md` is the same symptom Finding 15 diagnosed for Server 2025 —
+still unresolved in this project's own `packer-windows11/` track, since the `_noprompt`-patched-ISO
++ `-cpu host` fix that unblocked Server 2025 has **not yet been tried against Windows 11 here**.
+Given how closely the symptom matches, this is the natural next thing to attempt, not a dead end —
+worth doing before assuming Windows 11 needs the sibling project's heavier offline-apply mechanism.
+Separately, the sibling project `../windows-auto-build-pipeline/` already has its own independently
+working offline image-application path (WinPE + direct disk apply, bypassing Setup.exe's boot path
+entirely) for both Windows 11 and Server 2025 — worth knowing about as a proven fallback if the
+noprompt fix doesn't fully carry over (Windows 11 may have its own additional blocker beyond the
+boot loop; not yet checked from this project's side), but see its `README.md`/
+`project_documentation/` for current status before duplicating that investigation here.
+
+**Server 2025 is no longer in this list — see Finding 15's 2026-09-05 resolution.** It's
+implemented, confirmed working (two independent production runs: boot-only and with `iis`
+selected), and needs no further unblocking work. Remaining Server-2025-specific follow-ups, lower
+priority than anything above:
+- Pin `iso_checksum` in `locals.pkr.hcl`'s `"2025"` profile (currently `"none"`) now that builds
+  succeed reliably enough to make that verification meaningful.
+- The combined-role investigation (#1 above) has only ever been run against the Server 2022
+  baseline — worth knowing whether it reproduces identically on 2025 if that investigation is
+  ever resumed, rather than assuming the two OSes behave the same way here.

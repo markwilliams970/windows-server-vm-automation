@@ -21,7 +21,7 @@ The resulting environment is intended for:
 - Windows service troubleshooting
 - Windows event log testing
 - Performance counter testing
-- Support engineering practice
+- General systems/operations troubleshooting practice
 
 The environment should be disposable and reproducible.
 
@@ -29,9 +29,9 @@ The environment should be disposable and reproducible.
 
 # Implementation Status
 
-**Phase 1** (architecture) and **Phase 2** (unattended Windows install, Server 2022) are implemented and confirmed reliable under `packer/`, `build.sh` — a fully unattended build with no manual intervention has succeeded, including the WinRM auth fix (Finding 12) and the `oobeSystem`/`<Description>`-length fix (Finding 14) that blocked it initially. Windows Server 2025 is implemented but **blocked** on a known, unresolved upstream Packer/QEMU/OVMF boot issue — see Finding 15. Phase 2's detailed engineering log — every bug hit, how each was root-caused, and what's still open — lives in `WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md` at the repo root. Read it before touching `packer/answer_files/autounattend.xml.pkrtpl` or `packer/windows-server.pkr.hcl`; several fixes in there (character encoding/length limits in unattend `<Description>` elements, `winrm.exe` boolean config syntax, driver file dependencies, CD-ROM vs. floppy delivery) are non-obvious and easy to accidentally regress.
+**Phase 1** (architecture) and **Phase 2** (unattended Windows install) are implemented and confirmed reliable under `packer/`, `build.sh`, for **both Windows Server 2022 and 2025** — a fully unattended build with no manual intervention has succeeded on each, including the WinRM auth fix (Finding 12) and the `oobeSystem`/`<Description>`-length fix (Finding 14) that blocked 2022 initially. Server 2025 was blocked for a time on a known, unresolved upstream Packer/QEMU/OVMF boot issue — see Finding 15 — now resolved by routing around it (a `_noprompt`-patched ISO plus `-cpu host`, isolated entirely to Server 2025's own profile in `packer/locals.pkr.hcl`; 2022's own configuration is untouched) rather than by any actual upstream fix, which remains open. Phase 2's detailed engineering log — every bug hit, how each was root-caused, and what's still open — lives in `WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md` at the repo root. Read it before touching `packer/answer_files/autounattend.xml.pkrtpl` or `packer/windows-server.pkr.hcl`; several fixes in there (character encoding/length limits in unattend `<Description>` elements, `winrm.exe` boolean config syntax, driver file dependencies, CD-ROM vs. floppy delivery, a hard 15-character NetBIOS limit on `vm_name`/`ComputerName`) are non-obvious and easy to accidentally regress.
 
-**Phase 3** (Windows role configuration) is implemented and verified: IIS, AD DS, and SQL Server 2022 Developer Edition all work against the Server 2022 baseline **individually**, driven by `services.yaml` per the Service Selection design below. All three together (the worst-case combination) was tested twice against the dev baseline and **fails**: IIS and AD DS both succeed, then SQL Server setup errors (exit code `-2068119551`) at an identical point both times, ruling out memory pressure as the cause. Root cause not yet confirmed — the VM is torn down before its SQL Server setup log can be read — and this investigation is deliberately paused for now; see the Phase 3 section below and `ENGINEERING_GUIDE.md`'s roadmap. A Windows 11 client track was also attempted for both Phase 2 and Phase 3 (OS-aware `install-iis.ps1`) but is blocked by the same underlying issue as Server 2025 — see `WINDOWS11_UNATTENDED.md`. A separate project, `../windows-auto-build-pipeline/`, is pursuing an offline image-application approach to unblock both; see `HANDOFF_FROM_UNATTENDED_INSTALL.md` there.
+**Phase 3** (Windows role configuration) is implemented and verified: IIS, AD DS, and SQL Server 2022 Developer Edition all work against the Server 2022 baseline **individually**, driven by `services.yaml` per the Service Selection design below; `iis` is also independently verified against **Server 2025**, the first Phase 3 role ever confirmed on that OS. All three roles together (the worst-case combination) was tested twice against the Server 2022 dev baseline and **fails**: IIS and AD DS both succeed, then SQL Server setup errors (exit code `-2068119551`) at an identical point both times, ruling out memory pressure as the cause. Root cause not yet confirmed — the VM is torn down before its SQL Server setup log can be read — and this investigation is deliberately paused for now; see the Phase 3 section below and `ENGINEERING_GUIDE.md`'s roadmap. A Windows 11 client track was also attempted for both Phase 2 and Phase 3 (OS-aware `install-iis.ps1`) but remains blocked on the same underlying UEFI boot-key symptom Server 2025 hit — the fix that resolved it for Server 2025 hasn't been tried against Windows 11 in this project yet, though it's the natural next thing to attempt; see `WINDOWS11_UNATTENDED.md`. A separate project, `../windows-auto-build-pipeline/`, has an independently working offline image-application approach for both Windows 11 and Server 2025 as a proven fallback; see its `README.md`/`project_documentation/` there for current status.
 
 **Phases 4-6** (Datadog integration, lifecycle automation, snapshot-based build acceleration) are not yet implemented.
 
@@ -178,7 +178,7 @@ The final server should resemble a realistic enterprise Windows environment.
 
 ## Service Selection
 
-**Design decision (post-Phase-2, pre-Phase-3):** roles are not all installed on every build. Few real Windows Server deployments layer AD DS + IIS + other roles on a single box — most are single-purpose. Bundling everything by default doesn't reflect realistic customer environments to test against, particularly for FedRAMP/GovCloud-style scenarios this lab is meant to simulate.
+**Design decision (post-Phase-2, pre-Phase-3):** roles are not all installed on every build. Few real Windows Server deployments layer AD DS + IIS + other roles on a single box — most are single-purpose. Bundling everything by default doesn't reflect realistic customer environments to test against.
 
 Instead, which roles a given build installs is controlled by a YAML config file (e.g. `services.yaml` at the repo root, or passed via a build variable), something like:
 
@@ -247,12 +247,6 @@ DD_API_KEY
 DD_SITE
 ```
 
-Example:
-
-```
-DD_SITE=ddog-gov.com
-```
-
 The Agent installation must:
 
 - download/install automatically
@@ -299,6 +293,7 @@ windows-lab/
 │   ├── <name>.iso                              # build.sh/build-windows11.sh check currency vs. public source first
 │   ├── <name>.iso.sha256                       # sha256sum-format checksum sidecar
 │   └── <name>.iso.meta                         # source URL + upstream freshness fingerprint (ETag/version)
+│   └── derived/                                # windows_version=2025 only — build.sh's own `_noprompt`-patched derivative of the cached stock Server 2025 ISO (see Finding 15's resolution, WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md); keyed off the stock ISO's checksum, not independently re-downloaded/verified
 ├── image_cache/                                # Phase 6, not yet implemented — the post-Phase-2, pre-service-layering snapshot + its timestamp, see Phase 6 below
 │   ├── <profile>.qcow2                         # gitignored (*.qcow2); the captured disk itself
 │   └── <profile>.qcow2.meta                    # snapshot timestamp — builds within 180 days of this reuse the snapshot, builds after it force a fresh install and a new snapshot
@@ -430,7 +425,7 @@ Success criteria:
 
 A Windows Server 2022 VM installs without manual interaction.
 
-**Status:** implemented under `packer/` and `build.sh`, and confirmed: a fully unattended build (no manual intervention at any point) completes in ~18 minutes, per `WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`'s Finding 14. Only one such confirmed run exists so far — see that doc's Open Issues before treating reliability as fully proven across many runs. Windows Server 2025 uses the same template but is blocked on a separate, known upstream issue (Finding 15) unrelated to anything in this phase's own scope.
+**Status:** implemented under `packer/` and `build.sh`, and confirmed: a fully unattended build (no manual intervention at any point) completes in ~18 minutes, per `WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md`'s Finding 14. Only one such confirmed run exists so far — see that doc's Open Issues before treating reliability as fully proven across many runs. Windows Server 2025 uses the same template plus two small, isolated additions (an empty `boot_command` paired with a `_noprompt`-patched ISO, and `-cpu host` — both confined to `packer/locals.pkr.hcl`'s `"2025"` profile) and is confirmed working via two independent production runs (boot-only, ~34 minutes; with `iis` selected, ~1h11m) — see Finding 15's resolution writeup for the full account, including a real methodology mistake made and corrected along the way.
 
 ---
 
@@ -448,11 +443,11 @@ Success criteria:
 
 The Windows server has exactly the services listed in `services.yaml` running — no more, no less. A build with no roles selected still succeeds, producing a bare Windows Server with just the Datadog Agent (Phase 4).
 
-**Status:** implemented and verified under `scripts/`. `run-services.ps1` orchestrates role dispatch from `services.yaml`; `install-iis.ps1` (OS-aware — also usable on Windows 11 client SKUs once that track unblocks), `install-ad.ps1` + `verify-post-reboot.ps1` (AD DS promotion, including the reboot handoff to Packer's `windows-restart` provisioner), and `install-sql-server.ps1` (SQL Server 2022 Developer Edition, Mixed Mode auth) are all independently confirmed working against the Server 2022 baseline **one role at a time**.
+**Status:** implemented and verified under `scripts/`. `run-services.ps1` orchestrates role dispatch from `services.yaml`; `install-iis.ps1` (OS-aware — also usable on Windows 11 client SKUs once that track unblocks), `install-ad.ps1` + `verify-post-reboot.ps1` (AD DS promotion, including the reboot handoff to Packer's `windows-restart` provisioner), and `install-sql-server.ps1` (SQL Server 2022 Developer Edition, Mixed Mode auth) are all independently confirmed working against the Server 2022 baseline **one role at a time**. `install-iis.ps1` is additionally confirmed against **Server 2025** (`W3SVC` running, default site returns HTTP 200) — the first Phase 3 role ever run against that OS, once Phase 2's Finding 15 unblocked it; `ad-ds`/`sql-server` remain Server-2022-only so far.
 
-The worst-case combination — all three roles in one build — was tested via `dev/test-role.sh` against `dev/baseline/win2022-dc.qcow2`, twice: once at the dev harness's original 8GB memory allocation, once at 16GB (matching production's default). Both runs: `iis` and `ad-ds` install/configure successfully, then `sql-server` setup fails with the identical exit code `-2068119551` at the identical point (~16 minutes in, right after mounting the downloaded media and launching `setup.exe`). Identical failure at both memory levels rules out resource pressure as the cause. The leading unconfirmed hypothesis is that SQL Server setup runs while the machine is in AD DS's post-promotion, pre-reboot state (`Install-ADDSForest -NoRebootOnCompletion` has already run; the actual reboot only happens later, in Packer's `windows-restart` provisioner) — a real, non-default system state. Root cause is not yet confirmed: Packer's default on-error behavior tears down the VM and deletes its disk the instant a provisioner throws, so the real `C:\Program Files\Microsoft SQL Server\*\Setup Bootstrap\Log\Summary.txt` has been unrecoverable both times. This investigation is deliberately paused here for now — the worst case has been tried and documented as a known limitation, not left as a silent gap. See `ENGINEERING_GUIDE.md`'s roadmap for the concrete next step if it's picked back up (`-on-error=abort` to preserve the disk for real forensics).
+The worst-case combination — all three roles in one build — was tested via `dev/test-role.sh` against `dev/baseline/win2022-dc.qcow2`, twice: once at the dev harness's original 8GB memory allocation, once at 16GB (matching production's default). Both runs: `iis` and `ad-ds` install/configure successfully, then `sql-server` setup fails with the identical exit code `-2068119551` at the identical point (~16 minutes in, right after mounting the downloaded media and launching `setup.exe`). Identical failure at both memory levels rules out resource pressure as the cause. The leading unconfirmed hypothesis is that SQL Server setup runs while the machine is in AD DS's post-promotion, pre-reboot state (`Install-ADDSForest -NoRebootOnCompletion` has already run; the actual reboot only happens later, in Packer's `windows-restart` provisioner) — a real, non-default system state. Root cause is not yet confirmed: Packer's default on-error behavior tears down the VM and deletes its disk the instant a provisioner throws, so the real `C:\Program Files\Microsoft SQL Server\*\Setup Bootstrap\Log\Summary.txt` has been unrecoverable both times. This investigation is deliberately paused here for now — the worst case has been tried and documented as a known limitation, not left as a silent gap. See `ENGINEERING_GUIDE.md`'s roadmap for the concrete next step if it's picked back up (`-on-error=abort` to preserve the disk for real forensics). This combined-role investigation has only ever run against Server 2022 — not re-tried against 2025.
 
-The "no roles selected still succeeds" (empty `services.yaml`) case remains untested separately, unrelated to the finding above.
+The "no roles selected still succeeds" (empty `services.yaml`) case is confirmed on **Server 2025** specifically (its own boot-only production run, per Finding 15's resolution) but remains untested separately on Server 2022.
 
 ---
 

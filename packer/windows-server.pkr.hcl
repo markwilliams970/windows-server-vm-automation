@@ -37,10 +37,20 @@ source "qemu" "windows_server" {
   efi_firmware_code = var.efi_firmware_code
   efi_firmware_vars = var.efi_firmware_vars
 
+  # Empty for 2022 (packer/locals.pkr.hcl) — see that file's 2025 profile
+  # entry for why 2025 needs `-cpu host` here (and for a second, different
+  # failure that looked CD-ROM-wiring-related but wasn't — worth reading
+  # before touching this again). Safe specifically because qemuargs only
+  # overrides switches it names, and "-cpu" isn't one packer generates on
+  # its own — unlike the "-drive"/"-device" override the next comment warns
+  # about, this doesn't touch packer's own disk/CD-ROM wiring.
+  qemuargs = local.qemuargs
+
   # autounattend.xml + driver files go on a second generated CD-ROM (not
   # qemuargs, not a floppy — both tried and rejected first):
-  #   - qemuargs: setting it fully replaces packer's own "-drive" arguments,
-  #     including the main boot disk. Broke VM startup entirely.
+  #   - qemuargs: overriding "-drive"/"-device" this way replaces packer's
+  #     own default configuration for those exact switches entirely,
+  #     including the main boot disk. Broke VM startup entirely when tried.
   #   - floppy: content delivery was flaky specifically for larger files —
   #     NETKVM.SYS (192KB) repeatedly failed "pnputil /add-driver" with
   #     "the system cannot find the file specified" even right after a
@@ -85,18 +95,22 @@ source "qemu" "windows_server" {
   # and isn't predictable, so instead of guessing when to press once, keep
   # pressing spacebar every second for a long window to guarantee overlap.
   #
-  # windows_version=2025's media reliably fails this same mechanism outright
+  # windows_version=2025's media reliably failed this same mechanism outright
   # (falls through to the OVMF UEFI shell every time, even after widening
   # this window to 1s-wait/60s and forcing an explicit qemu -boot order hint
-  # - both reverted, neither helped) - a known, unresolved upstream issue as
-  # of this writing (hashicorp/packer#13342, #13514; HashiCorp Discuss "QEMU
-  # - Windows unable to boot in UEFI mode" reports the identical FS0/FS1 EFI
-  # Shell symptom with no confirmed fix). See WINDOWS_SERVER_UNATTENDED_
-  # THRU_PHASE2.md's Open Issues for the full investigation. Do not re-widen
-  # this window or re-add qemuargs for 2025 without new evidence - both were
-  # tried and shelved.
+  # - both reverted, neither helped) - a known, unresolved upstream issue
+  # (hashicorp/packer#13342, #13514; HashiCorp Discuss "QEMU - Windows unable
+  # to boot in UEFI mode" reports the identical FS0/FS1 EFI Shell symptom
+  # with no confirmed fix). See WINDOWS_SERVER_UNATTENDED_THRU_PHASE2.md's
+  # Finding 15 for the full investigation, and its "noprompt" update for how
+  # this got resolved: instead of trying to win the keystroke race, 2025's
+  # boot_command (packer/locals.pkr.hcl) is empty, because build.sh patches
+  # that version's cached ISO with Microsoft's own "_noprompt" boot files
+  # before packer ever sees it — no prompt on the media, so no keystroke is
+  # sent. Do not re-add a boot_command for 2025 without new evidence; the
+  # keystroke race itself was proven unfixable, not just untried.
   boot_wait    = "2s"
-  boot_command = [join("", [for _ in range(25) : "<spacebar><wait1>"])]
+  boot_command = local.boot_command
 
   shutdown_command = "shutdown /s /t 10 /f /d p:4:1 /c \"Packer shutdown\""
   shutdown_timeout = "15m"
